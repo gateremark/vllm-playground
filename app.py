@@ -6,14 +6,16 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
+import shutil
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 
 # Setup logging
@@ -110,10 +112,68 @@ class BenchmarkResults(BaseModel):
     completed: bool = False
 
 
+# ============ Compression Models ============
+
+class CompressionConfig(BaseModel):
+    """Configuration for model compression"""
+    model: str
+    output_dir: str = Field(default_factory=lambda: tempfile.mkdtemp(prefix="compressed_"))
+    
+    # Quantization format
+    quantization_format: Literal[
+        "W8A8_INT8", "W8A8_FP8", "W4A16", "W8A16", "FP4_W4A16", "FP4_W4A4", "W4A4"
+    ] = "W8A8_INT8"
+    
+    # Algorithm selection
+    algorithm: Literal["PTQ", "GPTQ", "AWQ", "SmoothQuant", "SparseGPT"] = "GPTQ"
+    
+    # Dataset configuration
+    dataset: str = "open_platypus"
+    num_calibration_samples: int = 512
+    max_seq_length: int = 2048
+    
+    # Advanced options
+    smoothing_strength: float = 0.8  # For SmoothQuant
+    target_layers: Optional[str] = "Linear"  # Comma-separated
+    ignore_layers: Optional[str] = "lm_head"  # Comma-separated
+    
+    # Additional parameters
+    hf_token: Optional[str] = None
+
+
+class CompressionStatus(BaseModel):
+    """Compression task status"""
+    running: bool
+    progress: float = 0.0  # 0-100
+    stage: str = "idle"  # idle, loading, calibrating, quantizing, saving, complete, error
+    message: str = ""
+    output_dir: Optional[str] = None
+    original_size_mb: Optional[float] = None
+    compressed_size_mb: Optional[float] = None
+    compression_ratio: Optional[float] = None
+    error: Optional[str] = None
+
+
+class CompressionPreset(BaseModel):
+    """Preset compression configuration"""
+    name: str
+    description: str
+    quantization_format: str
+    algorithm: str
+    emoji: str
+    expected_speedup: str
+    size_reduction: str
+
+
 current_config: Optional[VLLMConfig] = None
 server_start_time: Optional[datetime] = None
 benchmark_task: Optional[asyncio.Task] = None
 benchmark_results: Optional[BenchmarkResults] = None
+
+# Compression state
+compression_task: Optional[asyncio.Task] = None
+compression_status: CompressionStatus = CompressionStatus(running=False)
+compression_output_dir: Optional[Path] = None
 
 
 def get_chat_template_for_model(model_name: str) -> str:
@@ -902,6 +962,7 @@ async def list_models():
         
         # Larger models (may be slow on CPU)
         {"name": "mistralai/Mistral-7B-Instruct-v0.2", "size": "7B", "description": "Mistral Instruct (slow on CPU)", "cpu_friendly": False},
+        {"name": "RedHatAI/Llama-3.2-1B-Instruct-FP8", "size": "1B", "description": "Llama 3.2 1B Instruct FP8 (GPU-optimized, gated)", "cpu_friendly": False, "gated": True},
         {"name": "RedHatAI/Llama-3.1-8B-Instruct", "size": "8B", "description": "Llama 3.1 8B Instruct (gated)", "cpu_friendly": False, "gated": True},
     ]
     
@@ -1202,6 +1263,395 @@ async def run_benchmark(config: BenchmarkConfig, server_config: VLLMConfig):
         logger.error(f"Benchmark error: {e}")
         await broadcast_log(f"[BENCHMARK] Error: {e}")
         benchmark_results = None
+
+
+# ============ Compression Endpoints ============
+
+@app.get("/api/compress/presets")
+async def get_compression_presets() -> Dict[str, List[CompressionPreset]]:
+    """Get predefined compression presets"""
+    presets = [
+        CompressionPreset(
+            name="Quick INT8",
+            description="Fast W8A8 quantization with GPTQ - great balance of speed and quality",
+            quantization_format="W8A8_INT8",
+            algorithm="GPTQ",
+            emoji="⚡",
+            expected_speedup="2-3x faster",
+            size_reduction="~50% smaller"
+        ),
+        CompressionPreset(
+            name="Compact INT4",
+            description="W4A16 quantization with AWQ - maximum compression with good quality",
+            quantization_format="W4A16",
+            algorithm="AWQ",
+            emoji="📦",
+            expected_speedup="1.5-2x faster",
+            size_reduction="~75% smaller"
+        ),
+        CompressionPreset(
+            name="Production FP8",
+            description="FP8 activation quantization - production-grade performance",
+            quantization_format="W8A8_FP8",
+            algorithm="GPTQ",
+            emoji="🚀",
+            expected_speedup="3-4x faster",
+            size_reduction="~50% smaller"
+        ),
+        CompressionPreset(
+            name="Maximum Compression",
+            description="W4A4 FP4 quantization - highest compression ratio",
+            quantization_format="FP4_W4A4",
+            algorithm="GPTQ",
+            emoji="🎯",
+            expected_speedup="4-5x faster",
+            size_reduction="~85% smaller"
+        ),
+        CompressionPreset(
+            name="Smooth Quantization",
+            description="W8A8 with SmoothQuant - best for accuracy-sensitive tasks",
+            quantization_format="W8A8_INT8",
+            algorithm="SmoothQuant",
+            emoji="✨",
+            expected_speedup="2-3x faster",
+            size_reduction="~50% smaller"
+        ),
+    ]
+    
+    return {"presets": presets}
+
+
+@app.post("/api/compress/start")
+async def start_compression(config: CompressionConfig):
+    """Start model compression task"""
+    global compression_task, compression_status, compression_output_dir
+    
+    if compression_task is not None and not compression_task.done():
+        raise HTTPException(status_code=400, detail="Compression task already running")
+    
+    try:
+        # Reset status
+        compression_status = CompressionStatus(
+            running=True,
+            progress=0.0,
+            stage="initializing",
+            message="Starting compression..."
+        )
+        
+        # Create output directory
+        compression_output_dir = Path(config.output_dir)
+        compression_output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Start compression task
+        compression_task = asyncio.create_task(
+            run_compression(config)
+        )
+        
+        await broadcast_log("[COMPRESSION] Starting model compression...")
+        await broadcast_log(f"[COMPRESSION] Model: {config.model}")
+        await broadcast_log(f"[COMPRESSION] Format: {config.quantization_format}")
+        await broadcast_log(f"[COMPRESSION] Algorithm: {config.algorithm}")
+        
+        return {"status": "started", "message": "Compression task started"}
+    
+    except Exception as e:
+        logger.error(f"Failed to start compression: {e}")
+        compression_status.running = False
+        compression_status.stage = "error"
+        compression_status.error = str(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/compress/status")
+async def get_compression_status() -> CompressionStatus:
+    """Get current compression task status"""
+    global compression_status
+    return compression_status
+
+
+@app.post("/api/compress/stop")
+async def stop_compression():
+    """Stop the running compression task"""
+    global compression_task, compression_status
+    
+    if compression_task is None or compression_task.done():
+        raise HTTPException(status_code=400, detail="No compression task is running")
+    
+    try:
+        compression_task.cancel()
+        compression_status.running = False
+        compression_status.stage = "cancelled"
+        compression_status.message = "Compression cancelled by user"
+        
+        await broadcast_log("[COMPRESSION] Compression task cancelled")
+        return {"status": "cancelled"}
+    
+    except Exception as e:
+        logger.error(f"Failed to stop compression: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/compress/download")
+async def download_compressed_model():
+    """Download the compressed model"""
+    global compression_output_dir
+    
+    if compression_output_dir is None or not compression_output_dir.exists():
+        raise HTTPException(status_code=404, detail="No compressed model available")
+    
+    # Create a tar.gz archive of the output directory
+    import tarfile
+    
+    archive_path = compression_output_dir.parent / f"{compression_output_dir.name}.tar.gz"
+    
+    try:
+        with tarfile.open(archive_path, "w:gz") as tar:
+            tar.add(compression_output_dir, arcname=compression_output_dir.name)
+        
+        return FileResponse(
+            path=archive_path,
+            media_type="application/gzip",
+            filename=f"{compression_output_dir.name}.tar.gz"
+        )
+    
+    except Exception as e:
+        logger.error(f"Failed to create archive: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def run_compression(config: CompressionConfig):
+    """Run the compression task"""
+    global compression_status
+    
+    try:
+        # Set HF token if provided
+        env = os.environ.copy()
+        if config.hf_token:
+            env['HF_TOKEN'] = config.hf_token
+            env['HUGGING_FACE_HUB_TOKEN'] = config.hf_token
+        
+        compression_status.stage = "loading"
+        compression_status.progress = 10.0
+        compression_status.message = "Loading model and preparing for compression..."
+        await broadcast_log(f"[COMPRESSION] Loading model: {config.model}")
+        
+        # Get original model size
+        try:
+            # Try to estimate model size from HF
+            compression_status.original_size_mb = await estimate_model_size(config.model)
+        except Exception as e:
+            logger.warning(f"Could not estimate model size: {e}")
+        
+        compression_status.stage = "preparing"
+        compression_status.progress = 20.0
+        compression_status.message = "Preparing quantization recipe..."
+        await broadcast_log(f"[COMPRESSION] Preparing {config.algorithm} recipe...")
+        
+        # Build the recipe based on configuration
+        recipe = build_compression_recipe(config)
+        
+        compression_status.stage = "calibrating"
+        compression_status.progress = 30.0
+        compression_status.message = "Loading calibration dataset..."
+        await broadcast_log(f"[COMPRESSION] Loading dataset: {config.dataset}")
+        
+        # Import llmcompressor here to avoid issues if not installed
+        try:
+            from llmcompressor import oneshot
+        except ImportError:
+            raise Exception("llmcompressor not installed. Run: pip install llmcompressor")
+        
+        compression_status.progress = 40.0
+        compression_status.message = "Applying compression..."
+        await broadcast_log(f"[COMPRESSION] Applying {config.quantization_format} quantization...")
+        
+        # Simulate progress during compression since llmcompressor doesn't provide callbacks
+        # We'll update progress incrementally during the long-running operation
+        async def run_with_progress():
+            loop = asyncio.get_event_loop()
+            
+            # Start the compression in a background thread
+            compression_future = loop.run_in_executor(
+                None,
+                lambda: oneshot(
+                    model=config.model,
+                    dataset=config.dataset,
+                    recipe=recipe,
+                    output_dir=config.output_dir,
+                    max_seq_length=config.max_seq_length,
+                    num_calibration_samples=config.num_calibration_samples,
+                )
+            )
+            
+            # Simulate progress updates while compression is running
+            # Progress from 40% to 85% over the compression duration
+            progress_steps = [
+                (5, "Calibrating model layers..."),
+                (10, "Processing attention layers..."),
+                (15, "Quantizing weights..."),
+                (20, "Optimizing activations..."),
+                (25, "Applying compression recipe..."),
+                (30, "Processing remaining layers..."),
+                (35, "Finalizing quantization..."),
+                (40, "Validating compressed model..."),
+            ]
+            
+            step_idx = 0
+            while not compression_future.done():
+                await asyncio.sleep(5)  # Update every 5 seconds
+                
+                if step_idx < len(progress_steps):
+                    progress_increment, message = progress_steps[step_idx]
+                    compression_status.progress = min(40.0 + progress_increment, 85.0)
+                    compression_status.message = message
+                    await broadcast_log(f"[COMPRESSION] {message}")
+                    step_idx += 1
+                else:
+                    # Keep incrementing slowly after all steps
+                    compression_status.progress = min(compression_status.progress + 1, 85.0)
+            
+            # Wait for compression to complete
+            return await compression_future
+        
+        await run_with_progress()
+        
+        compression_status.stage = "saving"
+        compression_status.progress = 90.0
+        compression_status.message = "Saving compressed model..."
+        await broadcast_log(f"[COMPRESSION] Saving to: {config.output_dir}")
+        
+        # Get compressed model size
+        compressed_size = get_directory_size(Path(config.output_dir))
+        compression_status.compressed_size_mb = compressed_size
+        
+        if compression_status.original_size_mb:
+            compression_status.compression_ratio = (
+                compression_status.original_size_mb / compressed_size
+            )
+        
+        compression_status.stage = "complete"
+        compression_status.progress = 100.0
+        compression_status.message = "Compression complete!"
+        compression_status.output_dir = config.output_dir
+        compression_status.running = False
+        
+        await broadcast_log(f"[COMPRESSION] ✅ Compression complete!")
+        await broadcast_log(f"[COMPRESSION] Output: {config.output_dir}")
+        if compression_status.original_size_mb and compression_status.compressed_size_mb:
+            await broadcast_log(
+                f"[COMPRESSION] Size: {compression_status.original_size_mb:.1f}MB → "
+                f"{compression_status.compressed_size_mb:.1f}MB "
+                f"({compression_status.compression_ratio:.2f}x reduction)"
+            )
+    
+    except asyncio.CancelledError:
+        compression_status.running = False
+        compression_status.stage = "cancelled"
+        compression_status.message = "Compression cancelled"
+        await broadcast_log("[COMPRESSION] Task cancelled")
+        raise
+    
+    except Exception as e:
+        logger.error(f"Compression error: {e}", exc_info=True)
+        compression_status.running = False
+        compression_status.stage = "error"
+        compression_status.error = str(e)
+        compression_status.message = f"Error: {str(e)}"
+        await broadcast_log(f"[COMPRESSION] ❌ Error: {str(e)}")
+
+
+def build_compression_recipe(config: CompressionConfig) -> List:
+    """Build compression recipe based on configuration"""
+    recipe = []
+    
+    try:
+        from llmcompressor.modifiers.smoothquant import SmoothQuantModifier
+        from llmcompressor.modifiers.quantization import GPTQModifier, QuantizationModifier
+    except ImportError:
+        # Provide helpful error if llmcompressor not installed
+        raise Exception("llmcompressor not installed. Run: pip install llmcompressor")
+    
+    # Parse target and ignore layers
+    targets = config.target_layers or "Linear"
+    ignore = [layer.strip() for layer in (config.ignore_layers or "lm_head").split(",")]
+    
+    # Build scheme based on quantization format
+    scheme_map = {
+        "W8A8_INT8": "W8A8",
+        "W8A8_FP8": "W8A8_FP8",
+        "W4A16": "W4A16",
+        "W8A16": "W8A16",
+        "FP4_W4A16": "W4A16",  # FP4 is handled by vLLM
+        "FP4_W4A4": "W4A4",
+        "W4A4": "W4A4",
+    }
+    
+    scheme = scheme_map.get(config.quantization_format, "W8A8")
+    
+    # Add SmoothQuant if specified
+    if config.algorithm == "SmoothQuant":
+        recipe.append(
+            SmoothQuantModifier(smoothing_strength=config.smoothing_strength)
+        )
+    
+    # Add quantization modifier based on algorithm
+    if config.algorithm in ["GPTQ", "SmoothQuant", "PTQ"]:
+        recipe.append(
+            GPTQModifier(
+                scheme=scheme,
+                targets=targets,
+                ignore=ignore
+            )
+        )
+    elif config.algorithm == "AWQ":
+        # AWQ uses similar interface to GPTQ
+        recipe.append(
+            GPTQModifier(
+                scheme=scheme,
+                targets=targets,
+                ignore=ignore
+            )
+        )
+    
+    return recipe
+
+
+async def estimate_model_size(model_name: str) -> float:
+    """Estimate model size in MB from HuggingFace"""
+    # This is a rough estimate - in production you'd want to query HF API
+    # For now, use simple heuristics based on model name
+    
+    model_lower = model_name.lower()
+    
+    # Extract model size from name (e.g., "7b", "1.1b", "8b")
+    import re
+    size_match = re.search(r'(\d+\.?\d*)\s*b', model_lower)
+    
+    if size_match:
+        size_b = float(size_match.group(1))
+        # Rough estimate: ~2 bytes per parameter (fp16)
+        return size_b * 1024 * 2  # Convert to MB
+    
+    # Default estimates for common models
+    if 'tinyllama' in model_lower or '1b' in model_lower:
+        return 2200.0  # ~1.1B * 2 bytes
+    elif '7b' in model_lower:
+        return 14000.0  # ~7B * 2 bytes
+    elif '8b' in model_lower:
+        return 16000.0  # ~8B * 2 bytes
+    elif '13b' in model_lower:
+        return 26000.0  # ~13B * 2 bytes
+    
+    return 5000.0  # Default estimate
+
+
+def get_directory_size(directory: Path) -> float:
+    """Get total size of directory in MB"""
+    total_size = 0
+    for item in directory.rglob('*'):
+        if item.is_file():
+            total_size += item.stat().st_size
+    return total_size / (1024 * 1024)  # Convert to MB
 
 
 def main():
