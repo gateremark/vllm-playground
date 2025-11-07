@@ -1909,8 +1909,8 @@ class VLLMWebUI {
                 throw new Error(error.detail || 'Failed to start compression');
             }
             
-            // Start polling for status
-            this.compressionPollInterval = setInterval(() => this.pollCompressionStatus(), 2000);
+            // Start polling for status (every 1 second for smooth timer updates)
+            this.compressionPollInterval = setInterval(() => this.pollCompressionStatus(), 1000);
             this.showNotification('Compression started', 'success');
             
         } catch (error) {
