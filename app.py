@@ -64,6 +64,8 @@ class VLLMConfig(BaseModel):
     # Custom chat template and stop tokens (optional - overrides auto-detection)
     custom_chat_template: Optional[str] = None
     custom_stop_tokens: Optional[List[str]] = None
+    # Internal flag to track if model has built-in template
+    model_has_builtin_template: bool = False
 
 
 class ChatMessage(BaseModel):
@@ -76,7 +78,7 @@ class ChatRequest(BaseModel):
     """Chat request structure"""
     messages: List[ChatMessage]
     temperature: float = 0.7
-    max_tokens: int = 512
+    max_tokens: int = 256
     stream: bool = True
 
 
@@ -116,97 +118,195 @@ benchmark_results: Optional[BenchmarkResults] = None
 
 def get_chat_template_for_model(model_name: str) -> str:
     """
-    Get the appropriate chat template for a specific model.
-    Returns model-specific template if available, otherwise returns a generic template.
+    Get a reference chat template for a specific model.
+    
+    NOTE: This is now primarily used for documentation/reference purposes.
+    vLLM automatically detects and uses chat templates from tokenizer_config.json.
+    These templates are shown to match the model's actual tokenizer configuration.
+    
+    Supported models: Llama 2/3/3.1/3.2, Mistral/Mixtral, Gemma, TinyLlama, CodeLlama
     """
     model_lower = model_name.lower()
     
     # Llama 3/3.1/3.2 models (use new format with special tokens)
+    # Reference: Meta's official Llama 3 tokenizer_config.json
     if 'llama-3' in model_lower and ('llama-3.1' in model_lower or 'llama-3.2' in model_lower or 'llama-3-' in model_lower):
-        return "{% for message in messages %}{% if loop.first and message['role'] != 'system' %}<|begin_of_text|>{% endif %}{% if message['role'] == 'system' %}<|start_header_id|>system<|end_header_id|>\\n\\n{{ message['content'] }}<|eot_id|>{% endif %}{% if message['role'] == 'user' %}<|start_header_id|>user<|end_header_id|>\\n\\n{{ message['content'] }}<|eot_id|>{% endif %}{% if message['role'] == 'assistant' %}<|start_header_id|>assistant<|end_header_id|>\\n\\n{{ message['content'] }}<|eot_id|>{% endif %}{% endfor %}{% if messages[-1]['role'] != 'assistant' %}<|start_header_id|>assistant<|end_header_id|>\\n\\n{% endif %}"
+        return (
+            "{{- bos_token }}"
+            "{% for message in messages %}"
+            "{% if message['role'] == 'system' %}"
+            "{{- '<|start_header_id|>system<|end_header_id|>\\n\\n' + message['content'] + '<|eot_id|>' }}"
+            "{% elif message['role'] == 'user' %}"
+            "{{- '<|start_header_id|>user<|end_header_id|>\\n\\n' + message['content'] + '<|eot_id|>' }}"
+            "{% elif message['role'] == 'assistant' %}"
+            "{{- '<|start_header_id|>assistant<|end_header_id|>\\n\\n' + message['content'] + '<|eot_id|>' }}"
+            "{% endif %}"
+            "{% endfor %}"
+            "{% if add_generation_prompt %}"
+            "{{- '<|start_header_id|>assistant<|end_header_id|>\\n\\n' }}"
+            "{% endif %}"
+        )
     
-    # Llama 2 models (use old format with [INST] tags)
-    elif 'llama-2' in model_lower:
-        return "{% for message in messages %}{% if message['role'] == 'system' %}<<SYS>>\\n{{ message['content'] }}\\n<</SYS>>\\n\\n{% endif %}{% if message['role'] == 'user' %}[INST] {{ message['content'] }} [/INST]{% endif %}{% if message['role'] == 'assistant' %} {{ message['content'] }}</s>{% endif %}{% endfor %}"
+    # Llama 2 models (older [INST] format with <<SYS>>)
+    # Reference: Meta's official Llama 2 tokenizer_config.json
+    elif 'llama-2' in model_lower or 'llama2' in model_lower:
+        return (
+            "{% if messages[0]['role'] == 'system' %}"
+            "{% set loop_messages = messages[1:] %}"
+            "{% set system_message = messages[0]['content'] %}"
+            "{% else %}"
+            "{% set loop_messages = messages %}"
+            "{% set system_message = false %}"
+            "{% endif %}"
+            "{% for message in loop_messages %}"
+            "{% if loop.index0 == 0 and system_message != false %}"
+            "{{- '<s>[INST] <<SYS>>\\n' + system_message + '\\n<</SYS>>\\n\\n' + message['content'] + ' [/INST]' }}"
+            "{% elif message['role'] == 'user' %}"
+            "{{- '<s>[INST] ' + message['content'] + ' [/INST]' }}"
+            "{% elif message['role'] == 'assistant' %}"
+            "{{- ' ' + message['content'] + ' </s>' }}"
+            "{% endif %}"
+            "{% endfor %}"
+        )
     
-    # Mistral models
+    # Mistral/Mixtral models (similar to Llama 2 but simpler)
+    # Reference: Mistral AI's official tokenizer_config.json
     elif 'mistral' in model_lower or 'mixtral' in model_lower:
-        return "{% for message in messages %}{% if message['role'] == 'user' %}[INST] {{ message['content'] }} [/INST]{% endif %}{% if message['role'] == 'assistant' %}{{ message['content'] }}</s>{% endif %}{% endfor %}"
+        return (
+            "{{ bos_token }}"
+            "{% for message in messages %}"
+            "{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}"
+            "{{- raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}"
+            "{% endif %}"
+            "{% if message['role'] == 'user' %}"
+            "{{- '[INST] ' + message['content'] + ' [/INST]' }}"
+            "{% elif message['role'] == 'assistant' %}"
+            "{{- message['content'] + eos_token }}"
+            "{% else %}"
+            "{{- raise_exception('Only user and assistant roles are supported!') }}"
+            "{% endif %}"
+            "{% endfor %}"
+        )
     
-    # Gemma models (use ChatML-style)
+    # Gemma models (Google)
+    # Reference: Google's official Gemma tokenizer_config.json
     elif 'gemma' in model_lower:
-        return "{% for message in messages %}{% if message['role'] == 'user' %}<start_of_turn>user\\n{{ message['content'] }}<end_of_turn>\\n{% endif %}{% if message['role'] == 'assistant' %}<start_of_turn>model\\n{{ message['content'] }}<end_of_turn>\\n{% endif %}{% endfor %}<start_of_turn>model\\n"
+        return (
+            "{{ bos_token }}"
+            "{% if messages[0]['role'] == 'system' %}"
+            "{{- raise_exception('System role not supported') }}"
+            "{% endif %}"
+            "{% for message in messages %}"
+            "{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}"
+            "{{- raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}"
+            "{% endif %}"
+            "{% if message['role'] == 'user' %}"
+            "{{- '<start_of_turn>user\\n' + message['content'] | trim + '<end_of_turn>\\n' }}"
+            "{% elif message['role'] == 'assistant' %}"
+            "{{- '<start_of_turn>model\\n' + message['content'] | trim + '<end_of_turn>\\n' }}"
+            "{% endif %}"
+            "{% endfor %}"
+            "{% if add_generation_prompt %}"
+            "{{- '<start_of_turn>model\\n' }}"
+            "{% endif %}"
+        )
     
-    # TinyLlama and similar (use ChatML) - fixed to always add generation prompt
+    # TinyLlama (use ChatML format)
+    # Reference: TinyLlama's official tokenizer_config.json
     elif 'tinyllama' in model_lower or 'tiny-llama' in model_lower:
-        return "{% for message in messages %}{% if message['role'] == 'system' %}<|system|>\\n{{ message['content'] }}</s>\\n{% endif %}{% if message['role'] == 'user' %}<|user|>\\n{{ message['content'] }}</s>\\n{% endif %}{% if message['role'] == 'assistant' %}<|assistant|>\\n{{ message['content'] }}</s>\\n{% endif %}{% endfor %}<|assistant|>\\n"
+        return (
+            "{% for message in messages %}\\n"
+            "{% if message['role'] == 'user' %}\\n"
+            "{{- '<|user|>\\n' + message['content'] + eos_token }}\\n"
+            "{% elif message['role'] == 'system' %}\\n"
+            "{{- '<|system|>\\n' + message['content'] + eos_token }}\\n"
+            "{% elif message['role'] == 'assistant' %}\\n"
+            "{{- '<|assistant|>\\n'  + message['content'] + eos_token }}\\n"
+            "{% endif %}\\n"
+            "{% if loop.last and add_generation_prompt %}\\n"
+            "{{- '<|assistant|>' }}\\n"
+            "{% endif %}\\n"
+            "{% endfor %}"
+        )
     
-    # Vicuna models
-    elif 'vicuna' in model_lower:
-        return "{% for message in messages %}{% if message['role'] == 'system' %}{{ message['content'] }}\\n\\n{% endif %}{% if message['role'] == 'user' %}USER: {{ message['content'] }}\\n{% endif %}{% if message['role'] == 'assistant' %}ASSISTANT: {{ message['content'] }}</s>\\n{% endif %}{% endfor %}ASSISTANT:"
-    
-    # Alpaca models
-    elif 'alpaca' in model_lower:
-        return "{% for message in messages %}{% if message['role'] == 'system' %}{{ message['content'] }}\\n\\n{% endif %}{% if message['role'] == 'user' %}### Instruction:\\n{{ message['content'] }}\\n\\n{% endif %}{% if message['role'] == 'assistant' %}### Response:\\n{{ message['content'] }}\\n\\n{% endif %}{% endfor %}### Response:"
-    
-    # CodeLlama
+    # CodeLlama (uses Llama 2 format)
+    # Reference: Meta's CodeLlama tokenizer_config.json
     elif 'codellama' in model_lower or 'code-llama' in model_lower:
-        return "{% for message in messages %}{% if message['role'] == 'system' %}<<SYS>>\\n{{ message['content'] }}\\n<</SYS>>\\n\\n{% endif %}{% if message['role'] == 'user' %}[INST] {{ message['content'] }} [/INST]{% endif %}{% if message['role'] == 'assistant' %} {{ message['content'] }}</s>{% endif %}{% endfor %}"
-    
-    # OPT and other base models (generic simple format)
-    elif 'opt' in model_lower:
-        return "{% for message in messages %}{% if message['role'] == 'user' %}User: {{ message['content'] }}\\n{% elif message['role'] == 'assistant' %}Assistant: {{ message['content'] }}\\n{% elif message['role'] == 'system' %}{{ message['content'] }}\\n{% endif %}{% endfor %}Assistant:"
+        return (
+            "{% if messages[0]['role'] == 'system' %}"
+            "{% set loop_messages = messages[1:] %}"
+            "{% set system_message = messages[0]['content'] %}"
+            "{% else %}"
+            "{% set loop_messages = messages %}"
+            "{% set system_message = false %}"
+            "{% endif %}"
+            "{% for message in loop_messages %}"
+            "{% if loop.index0 == 0 and system_message != false %}"
+            "{{- '<s>[INST] <<SYS>>\\n' + system_message + '\\n<</SYS>>\\n\\n' + message['content'] + ' [/INST]' }}"
+            "{% elif message['role'] == 'user' %}"
+            "{{- '<s>[INST] ' + message['content'] + ' [/INST]' }}"
+            "{% elif message['role'] == 'assistant' %}"
+            "{{- ' ' + message['content'] + ' </s>' }}"
+            "{% endif %}"
+            "{% endfor %}"
+        )
     
     # Default generic template for unknown models
     else:
         logger.info(f"Using generic chat template for model: {model_name}")
-        return "{% for message in messages %}{% if message['role'] == 'user' %}User: {{ message['content'] }}\\n{% elif message['role'] == 'assistant' %}Assistant: {{ message['content'] }}\\n{% elif message['role'] == 'system' %}{{ message['content'] }}\\n{% endif %}{% endfor %}Assistant:"
+        return (
+            "{% for message in messages %}"
+            "{% if message['role'] == 'system' %}"
+            "{{- message['content'] + '\\n' }}"
+            "{% elif message['role'] == 'user' %}"
+            "{{- 'User: ' + message['content'] + '\\n' }}"
+            "{% elif message['role'] == 'assistant' %}"
+            "{{- 'Assistant: ' + message['content'] + '\\n' }}"
+            "{% endif %}"
+            "{% endfor %}"
+            "{% if add_generation_prompt %}"
+            "{{- 'Assistant:' }}"
+            "{% endif %}"
+        )
 
 
 def get_stop_tokens_for_model(model_name: str) -> List[str]:
     """
-    Get appropriate stop tokens for a specific model.
-    Uses only special tokens that won't appear in natural text.
+    Get reference stop tokens for a specific model.
+    
+    NOTE: This is now primarily used for documentation/reference purposes.
+    vLLM automatically handles stop tokens from the model's tokenizer.
+    These are only used if user explicitly provides custom stop tokens.
+    
+    Supported models: Llama 2/3/3.1/3.2, Mistral/Mixtral, Gemma, TinyLlama, CodeLlama
     """
     model_lower = model_name.lower()
     
-    # Llama 3/3.1/3.2 models - use new special tokens
+    # Llama 3/3.1/3.2 models - use special tokens
     if 'llama-3' in model_lower and ('llama-3.1' in model_lower or 'llama-3.2' in model_lower or 'llama-3-' in model_lower):
-        return ["<|eot_id|>", "<|end_of_text|>", "<|start_header_id|>"]
+        return ["<|eot_id|>", "<|end_of_text|>"]
     
-    # Llama 2 models - use old special tokens
-    elif 'llama-2' in model_lower:
-        return ["[INST]", "</s>", "<s>", "[/INST] [INST]"]
+    # Llama 2 models - use special tokens
+    elif 'llama-2' in model_lower or 'llama2' in model_lower:
+        return ["</s>", "[INST]"]
     
-    # Mistral models - use special tokens only
+    # Mistral/Mixtral models - use special tokens
     elif 'mistral' in model_lower or 'mixtral' in model_lower:
-        return ["[INST]", "</s>", "[/INST] [INST]"]
+        return ["</s>", "[INST]"]
     
-    # Gemma models - use special tokens only
+    # Gemma models - use special tokens
     elif 'gemma' in model_lower:
-        return ["<start_of_turn>", "<end_of_turn>"]
+        return ["<end_of_turn>", "<start_of_turn>"]
     
-    # TinyLlama - use aggressive stop tokens to prevent rambling and repetition
+    # TinyLlama - use ChatML special tokens
     elif 'tinyllama' in model_lower or 'tiny-llama' in model_lower:
-        return [
-            "<|user|>", "<|system|>", "</s>",
-            "\n\n",  # Stop at double newlines
-            " #", "😊", "🤗", "🎉", "❤️",  # Stop at hashtags and emojis
-            "User:", "Assistant:",  # Stop at leaked template markers
-            "How about you?",  # Stop at repetitive questions
-            "I'm doing",  # Stop at repetitive statements
-        ]
+        return ["</s>", "<|user|>", "<|system|>", "<|assistant|>"]
     
-    # Vicuna
-    elif 'vicuna' in model_lower:
-        return ["USER:", "ASSISTANT:", "</s>"]
+    # CodeLlama - use Llama 2 tokens
+    elif 'codellama' in model_lower or 'code-llama' in model_lower:
+        return ["</s>", "[INST]"]
     
-    # Alpaca
-    elif 'alpaca' in model_lower:
-        return ["### Instruction:", "### Response:"]
-    
-    # Default generic stop tokens - use patterns that indicate new turn, not template markers
-    # Use double newline + marker to avoid matching the template itself
+    # Default generic stop tokens for unknown models
     else:
         return ["\n\nUser:", "\n\nAssistant:"]
 
@@ -247,6 +347,17 @@ async def start_server(config: VLLMConfig):
     
     if vllm_process is not None and vllm_process.poll() is None:
         raise HTTPException(status_code=400, detail="Server is already running")
+    
+    # Check if gated model requires HF token
+    # Meta Llama models (official and RedHatAI) are gated in our supported list
+    model_lower = config.model.lower()
+    is_gated = 'meta-llama/' in model_lower or 'redhatai/llama' in model_lower
+    
+    if is_gated and not config.hf_token:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"This model ({config.model}) is gated and requires a HuggingFace token. Please provide your HF token."
+        )
     
     try:
         # Check if user manually selected CPU mode (takes precedence)
@@ -354,16 +465,25 @@ async def start_server(config: VLLMConfig):
         if config.enable_prefix_caching:
             cmd.append("--enable-prefix-caching")
         
-        # Add chat template for models that don't have one (required for transformers v4.44+)
-        # Use custom template if provided, otherwise auto-detect
+        # Chat template handling:
+        # Trust vLLM to auto-detect chat templates from tokenizer_config.json
+        # Modern models (2023+) all have built-in templates, vLLM will use them automatically
+        # Only pass --chat-template if user explicitly provides a custom override
         if config.custom_chat_template:
-            chat_template = config.custom_chat_template
-            await broadcast_log(f"[WEBUI] Using CUSTOM chat template")
+            # User provided custom template - write it to a temp file and pass to vLLM
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.jinja', delete=False) as f:
+                f.write(config.custom_chat_template)
+                template_file = f.name
+            cmd.extend(["--chat-template", template_file])
+            config.model_has_builtin_template = False  # Using custom override
+            await broadcast_log(f"[WEBUI] Using custom chat template from config (overrides model's built-in template)")
         else:
-            chat_template = get_chat_template_for_model(config.model)
-            await broadcast_log(f"[WEBUI] Using auto-detected chat template for: {config.model}")
-        
-        cmd.extend(["--chat-template", chat_template])
+            # Let vLLM auto-detect and use the model's built-in chat template
+            # vLLM will read it from tokenizer_config.json automatically
+            config.model_has_builtin_template = True  # Assume model has template (modern models do)
+            await broadcast_log(f"[WEBUI] Trusting vLLM to auto-detect chat template from tokenizer_config.json")
+            await broadcast_log(f"[WEBUI] vLLM will use model's built-in chat template automatically")
         
         logger.info(f"Starting vLLM with command: {' '.join(cmd)}")
         await broadcast_log(f"[WEBUI] Command: {' '.join(cmd)}")
@@ -584,14 +704,14 @@ class ChatRequestWithStopTokens(BaseModel):
     """Chat request structure with optional stop tokens override"""
     messages: List[ChatMessage]
     temperature: float = 0.7
-    max_tokens: int = 512
+    max_tokens: int = 256
     stream: bool = True
     stop_tokens: Optional[List[str]] = None  # Allow overriding stop tokens per request
 
 
 @app.post("/api/chat")
 async def chat(request: ChatRequestWithStopTokens):
-    """Proxy chat requests to vLLM server"""
+    """Proxy chat requests to vLLM server using OpenAI-compatible /v1/chat/completions endpoint"""
     global current_config
     
     if vllm_process is None or vllm_process.poll() is not None:
@@ -603,45 +723,90 @@ async def chat(request: ChatRequestWithStopTokens):
     try:
         import aiohttp
         
+        # Use OpenAI-compatible chat completions endpoint
+        # vLLM will automatically handle chat template formatting using the model's tokenizer config
         url = f"http://{current_config.host}:{current_config.port}/v1/chat/completions"
         
-        # Get stop tokens - prioritize request override, then custom config, then auto-detect
-        if request.stop_tokens:
-            stop_tokens = request.stop_tokens
-            logger.info(f"Using stop tokens from chat request: {stop_tokens}")
-        elif current_config.custom_stop_tokens:
-            stop_tokens = current_config.custom_stop_tokens
-            logger.info(f"Using custom stop tokens from config: {stop_tokens}")
-        else:
-            stop_tokens = get_stop_tokens_for_model(current_config.model)
-            logger.info(f"Using auto-detected stop tokens for {current_config.model}: {stop_tokens}")
+        # Convert messages to OpenAI format
+        messages_dict = [{"role": m.role, "content": m.content} for m in request.messages]
         
+        # Build payload for OpenAI-compatible endpoint
         payload = {
             "model": current_config.model,
-            "messages": [{"role": m.role, "content": m.content} for m in request.messages],
+            "messages": messages_dict,
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
             "stream": request.stream,
-            # Stop tokens to prevent the model from continuing beyond the assistant's response
-            "stop": stop_tokens
         }
+        
+        # Stop tokens handling:
+        # By default, trust vLLM to use appropriate stop tokens from the model's tokenizer
+        # Only override if user explicitly provides custom tokens in the server config
+        if current_config.custom_stop_tokens:
+            # User configured custom stop tokens in server config
+            payload["stop"] = current_config.custom_stop_tokens
+            logger.info(f"Using custom stop tokens from server config: {current_config.custom_stop_tokens}")
+        elif request.stop_tokens:
+            # User provided stop tokens in this specific request (not recommended)
+            payload["stop"] = request.stop_tokens
+            logger.warning(f"Using stop tokens from request (not recommended): {request.stop_tokens}")
+        else:
+            # Let vLLM handle stop tokens automatically from model's tokenizer (RECOMMENDED)
+            logger.info(f"✓ Letting vLLM handle stop tokens automatically (recommended for /v1/chat/completions)")
+        
+        # Log the request payload being sent to vLLM
+        logger.info(f"=== vLLM REQUEST ===")
+        logger.info(f"URL: {url}")
+        logger.info(f"Payload: {payload}")
+        logger.info(f"Messages ({len(messages_dict)}): {messages_dict}")
+        logger.info(f"==================")
         
         async def generate_stream():
             """Generator for streaming responses"""
+            full_response_text = ""  # Accumulate response for logging
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=payload) as response:
                     if response.status != 200:
                         text = await response.text()
+                        logger.error(f"=== vLLM ERROR RESPONSE ===")
+                        logger.error(f"Status: {response.status}")
+                        logger.error(f"Error: {text}")
+                        logger.error(f"==========================")
                         yield f"data: {{'error': '{text}'}}\n\n"
                         return
                     
+                    logger.info(f"=== vLLM STREAMING RESPONSE START ===")
                     # Stream the response line by line
+                    # OpenAI-compatible chat completions format
                     async for line in response.content:
                         if line:
                             decoded_line = line.decode('utf-8')
+                            # Log each chunk received
+                            if decoded_line.strip() and decoded_line.strip() != "data: [DONE]":
+                                logger.debug(f"vLLM chunk: {decoded_line.strip()}")
+                                # Try to extract content from SSE data
+                                import json
+                                if decoded_line.startswith("data: "):
+                                    try:
+                                        data_str = decoded_line[6:].strip()
+                                        if data_str and data_str != "[DONE]":
+                                            data = json.loads(data_str)
+                                            if 'choices' in data and len(data['choices']) > 0:
+                                                delta = data['choices'][0].get('delta', {})
+                                                content = delta.get('content', '')
+                                                if content:
+                                                    full_response_text += content
+                                    except:
+                                        pass
                             # Pass through the SSE formatted data
                             if decoded_line.strip():
                                 yield decoded_line
+                    
+                    # Log the complete response
+                    logger.info(f"=== vLLM COMPLETE RESPONSE ===")
+                    logger.info(f"Full text: {full_response_text}")
+                    logger.info(f"Length: {len(full_response_text)} chars")
+                    logger.info(f"===============================")
         
         if request.stream:
             # Return streaming response using SSE
@@ -659,9 +824,22 @@ async def chat(request: ChatRequestWithStopTokens):
                 async with session.post(url, json=payload) as response:
                     if response.status != 200:
                         text = await response.text()
+                        logger.error(f"=== vLLM ERROR RESPONSE (non-streaming) ===")
+                        logger.error(f"Status: {response.status}")
+                        logger.error(f"Error: {text}")
+                        logger.error(f"===========================================")
                         raise HTTPException(status_code=response.status, detail=text)
                     
                     data = await response.json()
+                    # Log the complete response
+                    logger.info(f"=== vLLM RESPONSE (non-streaming) ===")
+                    logger.info(f"Full response: {data}")
+                    if 'choices' in data and len(data['choices']) > 0:
+                        message = data['choices'][0].get('message', {})
+                        content = message.get('content', '')
+                        logger.info(f"Response text: {content}")
+                        logger.info(f"Length: {len(content)} chars")
+                    logger.info(f"=====================================")
                     return data
     
     except Exception as e:
@@ -673,7 +851,7 @@ class CompletionRequest(BaseModel):
     """Completion request structure for non-chat models"""
     prompt: str
     temperature: float = 0.7
-    max_tokens: int = 512
+    max_tokens: int = 256
 
 
 @app.post("/api/completion")
@@ -719,20 +897,47 @@ async def list_models():
     """Get list of common models"""
     common_models = [
         # CPU-optimized models (recommended for macOS)
-        {"name": "facebook/opt-125m", "size": "125M", "description": "Tiny test model (fastest)", "cpu_friendly": True},
         {"name": "TinyLlama/TinyLlama-1.1B-Chat-v1.0", "size": "1.1B", "description": "Compact chat model (CPU-friendly)", "cpu_friendly": True},
         {"name": "meta-llama/Llama-3.2-1B", "size": "1B", "description": "Llama 3.2 1B (CPU-friendly, gated)", "cpu_friendly": True, "gated": True},
-        {"name": "google/gemma-2-2b", "size": "2B", "description": "Gemma 2 2B (CPU-friendly, gated)", "cpu_friendly": True, "gated": True},
         
         # Larger models (may be slow on CPU)
-        {"name": "facebook/opt-1.3b", "size": "1.3B", "description": "OPT 1.3B", "cpu_friendly": True},
-        {"name": "facebook/opt-2.7b", "size": "2.7B", "description": "OPT 2.7B", "cpu_friendly": False},
-        {"name": "meta-llama/Llama-2-7b-chat-hf", "size": "7B", "description": "Llama 2 Chat (slow on CPU, gated)", "cpu_friendly": False, "gated": True},
         {"name": "mistralai/Mistral-7B-Instruct-v0.2", "size": "7B", "description": "Mistral Instruct (slow on CPU)", "cpu_friendly": False},
-        {"name": "codellama/CodeLlama-7b-Instruct-hf", "size": "7B", "description": "Code Llama (slow on CPU)", "cpu_friendly": False},
+        {"name": "RedHatAI/Llama-3.1-8B-Instruct", "size": "8B", "description": "Llama 3.1 8B Instruct (gated)", "cpu_friendly": False, "gated": True},
     ]
     
     return {"models": common_models}
+
+
+@app.get("/api/chat/template")
+async def get_chat_template():
+    """
+    Get information about the chat template being used by the currently loaded model.
+    vLLM auto-detects templates from tokenizer_config.json - this endpoint provides reference info.
+    """
+    global current_config, vllm_process
+    
+    if current_config is None:
+        raise HTTPException(status_code=400, detail="No model configuration available")
+    
+    if current_config.custom_chat_template:
+        # User is using a custom template
+        return {
+            "source": "custom (user-provided)",
+            "model": current_config.model,
+            "template": current_config.custom_chat_template,
+            "stop_tokens": current_config.custom_stop_tokens or [],
+            "note": "Using custom chat template provided by user (overrides model's built-in template)"
+        }
+    else:
+        # vLLM is auto-detecting from model's tokenizer_config.json
+        # We provide reference templates for documentation purposes
+        return {
+            "source": "auto-detected by vLLM",
+            "model": current_config.model,
+            "template": get_chat_template_for_model(current_config.model),
+            "stop_tokens": get_stop_tokens_for_model(current_config.model),
+            "note": "vLLM automatically uses the chat template from the model's tokenizer_config.json. The template shown here is a reference/fallback for documentation purposes only."
+        }
 
 
 @app.get("/api/vllm/metrics")
@@ -912,19 +1117,17 @@ async def run_benchmark(config: BenchmarkConfig, server_config: VLLMConfig):
                 request_start = time.time()
                 
                 try:
-                    # Get stop tokens - use custom if provided, otherwise auto-detect
-                    if server_config.custom_stop_tokens:
-                        stop_tokens = server_config.custom_stop_tokens
-                    else:
-                        stop_tokens = get_stop_tokens_for_model(server_config.model)
-                    
                     payload = {
                         "model": server_config.model,
                         "messages": [{"role": "user", "content": prompt_text}],
                         "max_tokens": config.output_tokens,
                         "temperature": 0.7,
-                        "stop": stop_tokens
                     }
+                    
+                    # Add stop tokens only if user configured custom ones
+                    # Otherwise let vLLM handle stop tokens automatically
+                    if server_config.custom_stop_tokens:
+                        payload["stop"] = server_config.custom_stop_tokens
                     
                     async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as response:
                         if response.status == 200:

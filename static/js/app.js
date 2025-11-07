@@ -60,7 +60,6 @@ class VLLMWebUI {
             templateSettingsContent: document.getElementById('template-settings-content'),
             chatTemplate: document.getElementById('chat-template'),
             stopTokens: document.getElementById('stop-tokens'),
-            resetTemplateBtn: document.getElementById('reset-template-btn'),
             
             // Command Preview
             commandText: document.getElementById('command-text'),
@@ -197,13 +196,14 @@ class VLLMWebUI {
         
         // Template Settings
         this.elements.templateSettingsToggle.addEventListener('click', () => this.toggleTemplateSettings());
-        this.elements.resetTemplateBtn.addEventListener('click', () => this.resetTemplate());
-        this.elements.modelSelect.addEventListener('change', () => this.updateTemplateForModel());
-        this.elements.customModel.addEventListener('blur', () => this.updateTemplateForModel());
-        
-        // Visual feedback when stop tokens are edited
-        this.elements.stopTokens.addEventListener('input', () => this.handleStopTokensEdit());
-        this.elements.chatTemplate.addEventListener('input', () => this.handleChatTemplateEdit());
+        this.elements.modelSelect.addEventListener('change', () => {
+            this.updateTemplateForModel();
+            this.optimizeSettingsForModel();
+        });
+        this.elements.customModel.addEventListener('blur', () => {
+            this.updateTemplateForModel();
+            this.optimizeSettingsForModel();
+        });
     }
 
     connectWebSocket() {
@@ -332,18 +332,9 @@ class VLLMWebUI {
             hf_token: hfToken || null  // Include HF token for gated models
         };
         
-        // Add custom template and stop tokens if provided
-        const customTemplate = this.elements.chatTemplate.value.trim();
-        const customStopTokens = this.elements.stopTokens.value.trim();
-        
-        if (customTemplate) {
-            config.custom_chat_template = customTemplate;
-        }
-        
-        if (customStopTokens) {
-            // Parse comma-separated stop tokens
-            config.custom_stop_tokens = customStopTokens.split(',').map(t => t.trim()).filter(t => t.length > 0);
-        }
+        // Don't send chat template or stop tokens - let vLLM auto-detect them
+        // The fields in the UI are for reference/display only
+        // Users who need custom templates can set them via server config JSON or API
         
         if (isCpuMode) {
             // CPU-specific settings
@@ -361,6 +352,17 @@ class VLLMWebUI {
 
     async startServer() {
         const config = this.getConfig();
+        
+        // Check if gated model requires HF token (frontend validation)
+        // Meta Llama models (official and RedHatAI) are gated in our supported list
+        const model = config.model.toLowerCase();
+        const isGated = model.includes('meta-llama/') || model.includes('redhatai/llama');
+        
+        if (isGated && !config.hf_token) {
+            this.showNotification(`⚠️ ${config.model} is a gated model and requires a HuggingFace token!`, 'error');
+            this.addLog(`❌ Gated model requires HF token: ${config.model}`, 'error');
+            return;
+        }
         
         // Reset ready state
         this.serverReady = false;
@@ -442,14 +444,6 @@ class VLLMWebUI {
             return;
         }
         
-        // Add system message at the start of conversation if provided and not already added
-        const systemPrompt = this.elements.systemPrompt.value.trim();
-        if (systemPrompt && this.chatHistory.length === 0) {
-            this.chatHistory.push({role: 'system', content: systemPrompt});
-            // Optionally display it in the chat
-            this.addChatMessage('system', `System prompt set: ${systemPrompt}`);
-        }
-        
         // Add user message to chat
         this.addChatMessage('user', message);
         this.chatHistory.push({role: 'user', content: message});
@@ -470,11 +464,22 @@ class VLLMWebUI {
         let usageData = null;
         
         try {
-            // Get current stop tokens from UI (if user edited them)
-            const stopTokensInput = this.elements.stopTokens.value.trim();
-            const stopTokens = stopTokensInput 
-                ? stopTokensInput.split(',').map(t => t.trim()).filter(t => t.length > 0)
-                : null;
+            // Get current system prompt and prepare messages
+            const systemPrompt = this.elements.systemPrompt.value.trim();
+            let messagesToSend = [...this.chatHistory];  // Copy chat history
+            
+            // Prepend system prompt to messages if provided
+            // This ensures system prompt is sent with every request dynamically
+            if (systemPrompt) {
+                messagesToSend = [
+                    {role: 'system', content: systemPrompt},
+                    ...this.chatHistory
+                ];
+            }
+            
+            // Don't send stop tokens by default - let vLLM handle them automatically via chat template
+            // Stop tokens are only for reference/documentation in the UI
+            // Users can still set custom_stop_tokens in the server config if needed
             
             // Use streaming
             const response = await fetch('/api/chat', {
@@ -483,11 +488,11 @@ class VLLMWebUI {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    messages: this.chatHistory,
+                    messages: messagesToSend,  // Send messages with system prompt prepended
                     temperature: parseFloat(this.elements.temperature.value),
                     max_tokens: parseInt(this.elements.maxTokens.value),
-                    stream: true,
-                    stop_tokens: stopTokens  // Send current stop tokens from UI
+                    stream: true
+                    // No stop_tokens - let vLLM handle them automatically
                 })
             });
             
@@ -527,16 +532,31 @@ class VLLMWebUI {
                             const parsed = JSON.parse(data);
                             
                             if (parsed.choices && parsed.choices.length > 0) {
-                                const delta = parsed.choices[0].delta;
+                                // Handle OpenAI-compatible chat completions endpoint format
+                                const choice = parsed.choices[0];
+                                let content = null;
                                 
-                                if (delta && delta.content) {
+                                // Chat completions endpoint format (standard OpenAI format)
+                                if (choice.delta && choice.delta.content) {
+                                    content = choice.delta.content;
+                                }
+                                // Fallback: Non-streaming or old format (message.content)
+                                else if (choice.message && choice.message.content) {
+                                    content = choice.message.content;
+                                }
+                                // Fallback: Completions endpoint format (if vLLM still returns this)
+                                else if (choice.text !== undefined) {
+                                    content = choice.text;
+                                }
+                                
+                                if (content) {
                                     // Capture time to first token
                                     if (firstTokenTime === null) {
                                         firstTokenTime = Date.now();
                                         console.log('Time to first token:', (firstTokenTime - startTime) / 1000, 'seconds');
                                     }
                                     
-                                    fullText += delta.content;
+                                    fullText += content;
                                     // Update the message in real-time with cursor
                                     textSpan.textContent = `${fullText}▌`;
                                     
@@ -570,11 +590,23 @@ class VLLMWebUI {
             
             // Remove cursor and finalize
             if (fullText) {
-                // Clean up response: trim and limit excessive newlines (4+ → 2)
+                // Clean up response:
+                // 1. Remove literal escape sequences (\r\n, \n, \r as text)
+                fullText = fullText.replace(/\\r\\n/g, '\n');  // Replace literal \r\n with actual newline
+                fullText = fullText.replace(/\\n/g, '\n');     // Replace literal \n with actual newline
+                fullText = fullText.replace(/\\r/g, '');       // Remove literal \r
+                
+                // 2. Trim and limit excessive newlines (4+ → 2)
                 fullText = fullText.replace(/\n{4,}/g, '\n\n').trim();
                 
-                textSpan.textContent = fullText;
-                this.chatHistory.push({role: 'assistant', content: fullText});
+                // 3. If response is ONLY newlines/whitespace, mark as error
+                if (!fullText || fullText.match(/^[\s\n\r]+$/)) {
+                    textSpan.textContent = 'Model generated only whitespace. Try: 1) Clear system prompt, 2) Lower temperature, 3) Different model';
+                    assistantMessageDiv.classList.add('error');
+                } else {
+                    textSpan.textContent = fullText;
+                    this.chatHistory.push({role: 'assistant', content: fullText});
+                }
             } else {
                 textSpan.textContent = 'No response from model';
                 assistantMessageDiv.classList.add('error');
@@ -751,6 +783,9 @@ class VLLMWebUI {
             console.log('🎉 Server startup detected! Setting serverReady = true');
             this.serverReady = true;
             this.updateSendButtonState();
+            
+            // Fetch and display the chat template being used by the model
+            this.fetchChatTemplate();
         }
         
         // Auto-detect log type if not specified
@@ -919,15 +954,9 @@ class VLLMWebUI {
         if (kvCacheUsageEl) {
             // GPU KV cache usage - from vLLM stats if available
             if (metrics.kvCacheUsage !== undefined && metrics.kvCacheUsage !== null) {
-                // Handle both decimal (0.85) and percentage (85) formats
-                let percentage;
-                if (metrics.kvCacheUsage <= 1.0) {
-                    // Decimal format (0.0 to 1.0)
-                    percentage = (metrics.kvCacheUsage * 100).toFixed(1);
-                } else {
-                    // Already a percentage
-                    percentage = metrics.kvCacheUsage.toFixed(1);
-                }
+                // Server already sends percentage values (e.g., 0.2 = 0.2%, not 20%)
+                // No conversion needed
+                const percentage = metrics.kvCacheUsage.toFixed(1);
                 
                 // Add staleness indicator if metrics are old
                 if (metrics.metricsAge !== undefined && metrics.metricsAge > 5) {
@@ -951,15 +980,9 @@ class VLLMWebUI {
         if (prefixCacheHitEl) {
             // Prefix cache hit rate - from vLLM stats if available
             if (metrics.prefixCacheHitRate !== undefined && metrics.prefixCacheHitRate !== null) {
-                // Handle both decimal (0.85) and percentage (85) formats
-                let percentage;
-                if (metrics.prefixCacheHitRate <= 1.0) {
-                    // Decimal format (0.0 to 1.0)
-                    percentage = (metrics.prefixCacheHitRate * 100).toFixed(1);
-                } else {
-                    // Already a percentage
-                    percentage = metrics.prefixCacheHitRate.toFixed(1);
-                }
+                // Server already sends percentage values (e.g., 36.1 = 36.1%, not 3610%)
+                // No conversion needed
+                const percentage = metrics.prefixCacheHitRate.toFixed(1);
                 
                 // Add staleness indicator if metrics are old
                 if (metrics.metricsAge !== undefined && metrics.metricsAge > 5) {
@@ -1059,6 +1082,9 @@ class VLLMWebUI {
         if (disableLogStats) {
             cmd += ` \\\n  --disable-log-stats`;
         }
+        
+        // Add chat template flag (vLLM requires this for /v1/chat/completions)
+        cmd += ` \\\n  --chat-template <auto-detected-or-custom>`;
         
         // Update the display (use value for textarea)
         this.elements.commandText.value = cmd;
@@ -1234,6 +1260,29 @@ class VLLMWebUI {
         }
     }
     
+    async fetchChatTemplate() {
+        try {
+            const response = await fetch('/api/chat/template');
+            if (response.ok) {
+                const data = await response.json();
+                console.log('Fetched chat template from backend:', data);
+                
+                // Update the template fields with the model's actual template
+                this.elements.chatTemplate.value = data.template;
+                this.elements.stopTokens.value = data.stop_tokens.join(', ');
+                
+                // Show a notification about where the template came from
+                if (data.note) {
+                    this.addLog(`[INFO] ${data.note}`, 'info');
+                }
+                
+                this.addLog(`[INFO] Chat template loaded from ${data.source} for model: ${data.model}`, 'info');
+            }
+        } catch (error) {
+            console.error('Failed to fetch chat template:', error);
+        }
+    }
+    
     updateTemplateForModel(silent = false) {
         const model = this.elements.customModel.value.trim() || this.elements.modelSelect.value;
         const template = this.getTemplateForModel(model);
@@ -1248,7 +1297,7 @@ class VLLMWebUI {
         // Only show feedback if not silent (i.e., when user actively changes model)
         if (!silent) {
             // Show visual feedback that template was updated
-            this.showNotification(`Chat template updated for: ${model.split('/').pop()}`, 'success');
+            this.showNotification(`Chat template reference updated for: ${model.split('/').pop()}`, 'success');
             
             // Add visual highlight to template fields briefly
             this.elements.chatTemplate.style.transition = 'background-color 0.3s ease';
@@ -1261,161 +1310,209 @@ class VLLMWebUI {
                 this.elements.stopTokens.style.backgroundColor = '';
             }, 1000);
             
-            // Warn if server is currently running
+            // Note: vLLM handles templates automatically
             if (this.serverRunning) {
-                this.showNotification('⚠️ Server is running! Restart to apply new template', 'warning');
-                this.addLog('[WARNING] Model changed while server is running. Restart server to apply new chat template.', 'warning');
+                this.showNotification('✅ Note: vLLM applies templates automatically from tokenizer config', 'success');
+                this.addLog('[INFO] Model template reference updated. vLLM will use the model\'s built-in chat template automatically.', 'info');
             }
         }
-    }
-    
-    resetTemplate() {
-        this.updateTemplateForModel(true);  // Silent mode, we'll show our own notification
-        this.showNotification('Template reset to auto-detected values', 'success');
-    }
-    
-    handleStopTokensEdit() {
-        // Clear any existing timeout
-        if (this.stopTokensEditTimeout) {
-            clearTimeout(this.stopTokensEditTimeout);
-        }
-        
-        // Add visual feedback
-        this.elements.stopTokens.style.borderColor = '#10b981';
-        
-        // Show brief feedback after user stops typing
-        this.stopTokensEditTimeout = setTimeout(() => {
-            this.elements.stopTokens.style.borderColor = '';
-            
-            // Only show notification if server is running (when it matters)
-            if (this.serverRunning) {
-                console.log('Stop tokens edited - will be used in next chat');
-            }
-        }, 1000);
-    }
-    
-    handleChatTemplateEdit() {
-        // Clear any existing timeout
-        if (this.chatTemplateEditTimeout) {
-            clearTimeout(this.chatTemplateEditTimeout);
-        }
-        
-        // Add visual feedback (warning color since it requires restart)
-        this.elements.chatTemplate.style.borderColor = '#f59e0b';
-        
-        // Show feedback after user stops typing
-        this.chatTemplateEditTimeout = setTimeout(() => {
-            this.elements.chatTemplate.style.borderColor = '';
-            
-            // Show warning if server is running
-            if (this.serverRunning) {
-                this.showNotification('⚠️ Chat template changed - restart server to apply', 'warning');
-            }
-        }, 1500);
     }
     
     getTemplateForModel(modelName) {
         const model = modelName.toLowerCase();
         
         // Llama 3/3.1/3.2 models (use new format with special tokens)
+        // Reference: Meta's official Llama 3 tokenizer_config.json
         if (model.includes('llama-3') && (model.includes('llama-3.1') || model.includes('llama-3.2') || model.includes('llama-3-'))) {
-            return "{% for message in messages %}{% if loop.first and message['role'] != 'system' %}<|begin_of_text|>{% endif %}{% if message['role'] == 'system' %}<|start_header_id|>system<|end_header_id|>\\n\\n{{ message['content'] }}<|eot_id|>{% endif %}{% if message['role'] == 'user' %}<|start_header_id|>user<|end_header_id|>\\n\\n{{ message['content'] }}<|eot_id|>{% endif %}{% if message['role'] == 'assistant' %}<|start_header_id|>assistant<|end_header_id|>\\n\\n{{ message['content'] }}<|eot_id|>{% endif %}{% endfor %}{% if messages[-1]['role'] != 'assistant' %}<|start_header_id|>assistant<|end_header_id|>\\n\\n{% endif %}";
+            return (
+                "{{- bos_token }}"
+                + "{% for message in messages %}"
+                + "{% if message['role'] == 'system' %}"
+                + "{{- '<|start_header_id|>system<|end_header_id|>\\n\\n' + message['content'] + '<|eot_id|>' }}"
+                + "{% elif message['role'] == 'user' %}"
+                + "{{- '<|start_header_id|>user<|end_header_id|>\\n\\n' + message['content'] + '<|eot_id|>' }}"
+                + "{% elif message['role'] == 'assistant' %}"
+                + "{{- '<|start_header_id|>assistant<|end_header_id|>\\n\\n' + message['content'] + '<|eot_id|>' }}"
+                + "{% endif %}"
+                + "{% endfor %}"
+                + "{% if add_generation_prompt %}"
+                + "{{- '<|start_header_id|>assistant<|end_header_id|>\\n\\n' }}"
+                + "{% endif %}"
+            );
         }
         
-        // Llama 2 models (use old format with [INST] tags)
-        else if (model.includes('llama-2')) {
-            return "{% for message in messages %}{% if message['role'] == 'system' %}<<SYS>>\\n{{ message['content'] }}\\n<</SYS>>\\n\\n{% endif %}{% if message['role'] == 'user' %}[INST] {{ message['content'] }} [/INST]{% endif %}{% if message['role'] == 'assistant' %} {{ message['content'] }}</s>{% endif %}{% endfor %}";
+        // Llama 2 models (older [INST] format with <<SYS>>)
+        // Reference: Meta's official Llama 2 tokenizer_config.json
+        else if (model.includes('llama-2') || model.includes('llama2')) {
+            return (
+                "{% if messages[0]['role'] == 'system' %}"
+                + "{% set loop_messages = messages[1:] %}"
+                + "{% set system_message = messages[0]['content'] %}"
+                + "{% else %}"
+                + "{% set loop_messages = messages %}"
+                + "{% set system_message = false %}"
+                + "{% endif %}"
+                + "{% for message in loop_messages %}"
+                + "{% if loop.index0 == 0 and system_message != false %}"
+                + "{{- '<s>[INST] <<SYS>>\\n' + system_message + '\\n<</SYS>>\\n\\n' + message['content'] + ' [/INST]' }}"
+                + "{% elif message['role'] == 'user' %}"
+                + "{{- '<s>[INST] ' + message['content'] + ' [/INST]' }}"
+                + "{% elif message['role'] == 'assistant' %}"
+                + "{{- ' ' + message['content'] + ' </s>' }}"
+                + "{% endif %}"
+                + "{% endfor %}"
+            );
         }
         
-        // Mistral models
+        // Mistral/Mixtral models (similar to Llama 2 but simpler)
+        // Reference: Mistral AI's official tokenizer_config.json
         else if (model.includes('mistral') || model.includes('mixtral')) {
-            return "{% for message in messages %}{% if message['role'] == 'user' %}[INST] {{ message['content'] }} [/INST]{% endif %}{% if message['role'] == 'assistant' %}{{ message['content'] }}</s>{% endif %}{% endfor %}";
+            return (
+                "{{ bos_token }}"
+                + "{% for message in messages %}"
+                + "{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}"
+                + "{{- raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}"
+                + "{% endif %}"
+                + "{% if message['role'] == 'user' %}"
+                + "{{- '[INST] ' + message['content'] + ' [/INST]' }}"
+                + "{% elif message['role'] == 'assistant' %}"
+                + "{{- message['content'] + eos_token }}"
+                + "{% else %}"
+                + "{{- raise_exception('Only user and assistant roles are supported!') }}"
+                + "{% endif %}"
+                + "{% endfor %}"
+            );
         }
         
-        // Gemma models
+        // Gemma models (Google)
+        // Reference: Google's official Gemma tokenizer_config.json
         else if (model.includes('gemma')) {
-            return "{% for message in messages %}{% if message['role'] == 'user' %}<start_of_turn>user\\n{{ message['content'] }}<end_of_turn>\\n{% endif %}{% if message['role'] == 'assistant' %}<start_of_turn>model\\n{{ message['content'] }}<end_of_turn>\\n{% endif %}{% endfor %}<start_of_turn>model\\n";
+            return (
+                "{{ bos_token }}"
+                + "{% if messages[0]['role'] == 'system' %}"
+                + "{{- raise_exception('System role not supported') }}"
+                + "{% endif %}"
+                + "{% for message in messages %}"
+                + "{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}"
+                + "{{- raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}"
+                + "{% endif %}"
+                + "{% if message['role'] == 'user' %}"
+                + "{{- '<start_of_turn>user\\n' + message['content'] | trim + '<end_of_turn>\\n' }}"
+                + "{% elif message['role'] == 'assistant' %}"
+                + "{{- '<start_of_turn>model\\n' + message['content'] | trim + '<end_of_turn>\\n' }}"
+                + "{% endif %}"
+                + "{% endfor %}"
+                + "{% if add_generation_prompt %}"
+                + "{{- '<start_of_turn>model\\n' }}"
+                + "{% endif %}"
+            );
         }
         
-        // TinyLlama
+        // TinyLlama (use ChatML format)
+        // Reference: TinyLlama's official tokenizer_config.json
         else if (model.includes('tinyllama') || model.includes('tiny-llama')) {
-            return "{% for message in messages %}{% if message['role'] == 'system' %}<|system|>\\n{{ message['content'] }}</s>\\n{% endif %}{% if message['role'] == 'user' %}<|user|>\\n{{ message['content'] }}</s>\\n{% endif %}{% if message['role'] == 'assistant' %}<|assistant|>\\n{{ message['content'] }}</s>\\n{% endif %}{% endfor %}<|assistant|>\\n";
+            return (
+                "{% for message in messages %}\\n"
+                + "{% if message['role'] == 'user' %}\\n"
+                + "{{- '<|user|>\\n' + message['content'] + eos_token }}\\n"
+                + "{% elif message['role'] == 'system' %}\\n"
+                + "{{- '<|system|>\\n' + message['content'] + eos_token }}\\n"
+                + "{% elif message['role'] == 'assistant' %}\\n"
+                + "{{- '<|assistant|>\\n'  + message['content'] + eos_token }}\\n"
+                + "{% endif %}\\n"
+                + "{% if loop.last and add_generation_prompt %}\\n"
+                + "{{- '<|assistant|>' }}\\n"
+                + "{% endif %}\\n"
+                + "{% endfor %}"
+            );
         }
         
-        // Vicuna
-        else if (model.includes('vicuna')) {
-            return "{% for message in messages %}{% if message['role'] == 'system' %}{{ message['content'] }}\\n\\n{% endif %}{% if message['role'] == 'user' %}USER: {{ message['content'] }}\\n{% endif %}{% if message['role'] == 'assistant' %}ASSISTANT: {{ message['content'] }}</s>\\n{% endif %}{% endfor %}ASSISTANT:";
-        }
-        
-        // Alpaca
-        else if (model.includes('alpaca')) {
-            return "{% for message in messages %}{% if message['role'] == 'system' %}{{ message['content'] }}\\n\\n{% endif %}{% if message['role'] == 'user' %}### Instruction:\\n{{ message['content'] }}\\n\\n{% endif %}{% if message['role'] == 'assistant' %}### Response:\\n{{ message['content'] }}\\n\\n{% endif %}{% endfor %}### Response:";
-        }
-        
-        // CodeLlama
+        // CodeLlama (uses Llama 2 format)
+        // Reference: Meta's CodeLlama tokenizer_config.json
         else if (model.includes('codellama') || model.includes('code-llama')) {
-            return "{% for message in messages %}{% if message['role'] == 'system' %}<<SYS>>\\n{{ message['content'] }}\\n<</SYS>>\\n\\n{% endif %}{% if message['role'] == 'user' %}[INST] {{ message['content'] }} [/INST]{% endif %}{% if message['role'] == 'assistant' %} {{ message['content'] }}</s>{% endif %}{% endfor %}";
-        }
-        
-        // OPT and generic
-        else if (model.includes('opt')) {
-            return "{% for message in messages %}{% if message['role'] == 'user' %}User: {{ message['content'] }}\\n{% elif message['role'] == 'assistant' %}Assistant: {{ message['content'] }}\\n{% elif message['role'] == 'system' %}{{ message['content'] }}\\n{% endif %}{% endfor %}Assistant:";
+            return (
+                "{% if messages[0]['role'] == 'system' %}"
+                + "{% set loop_messages = messages[1:] %}"
+                + "{% set system_message = messages[0]['content'] %}"
+                + "{% else %}"
+                + "{% set loop_messages = messages %}"
+                + "{% set system_message = false %}"
+                + "{% endif %}"
+                + "{% for message in loop_messages %}"
+                + "{% if loop.index0 == 0 and system_message != false %}"
+                + "{{- '<s>[INST] <<SYS>>\\n' + system_message + '\\n<</SYS>>\\n\\n' + message['content'] + ' [/INST]' }}"
+                + "{% elif message['role'] == 'user' %}"
+                + "{{- '<s>[INST] ' + message['content'] + ' [/INST]' }}"
+                + "{% elif message['role'] == 'assistant' %}"
+                + "{{- ' ' + message['content'] + ' </s>' }}"
+                + "{% endif %}"
+                + "{% endfor %}"
+            );
         }
         
         // Default generic template for unknown models
         else {
             console.log('Using generic chat template for model:', modelName);
-            return "{% for message in messages %}{% if message['role'] == 'user' %}User: {{ message['content'] }}\\n{% elif message['role'] == 'assistant' %}Assistant: {{ message['content'] }}\\n{% elif message['role'] == 'system' %}{{ message['content'] }}\\n{% endif %}{% endfor %}Assistant:";
+            return (
+                "{% for message in messages %}"
+                + "{% if message['role'] == 'system' %}"
+                + "{{- message['content'] + '\\n' }}"
+                + "{% elif message['role'] == 'user' %}"
+                + "{{- 'User: ' + message['content'] + '\\n' }}"
+                + "{% elif message['role'] == 'assistant' %}"
+                + "{{- 'Assistant: ' + message['content'] + '\\n' }}"
+                + "{% endif %}"
+                + "{% endfor %}"
+                + "{% if add_generation_prompt %}"
+                + "{{- 'Assistant:' }}"
+                + "{% endif %}"
+            );
         }
     }
     
     getStopTokensForModel(modelName) {
         const model = modelName.toLowerCase();
         
-        // Llama 3/3.1/3.2 models - use new special tokens
+        // Llama 3/3.1/3.2 models - use special tokens
         if (model.includes('llama-3') && (model.includes('llama-3.1') || model.includes('llama-3.2') || model.includes('llama-3-'))) {
-            return ["<|eot_id|>", "<|end_of_text|>", "<|start_header_id|>"];
+            return ["<|eot_id|>", "<|end_of_text|>"];
         }
         
-        // Llama 2 models - use old special tokens
-        else if (model.includes('llama-2')) {
-            return ["[INST]", "</s>", "<s>", "[/INST] [INST]"];
+        // Llama 2 models - use special tokens
+        else if (model.includes('llama-2') || model.includes('llama2')) {
+            return ["</s>", "[INST]"];
         }
         
-        // Mistral models - use special tokens only
+        // Mistral/Mixtral models - use special tokens
         else if (model.includes('mistral') || model.includes('mixtral')) {
-            return ["[INST]", "</s>", "[/INST] [INST]"];
+            return ["</s>", "[INST]"];
         }
         
-        // Gemma models - use special tokens only
+        // Gemma models - use special tokens
         else if (model.includes('gemma')) {
-            return ["<start_of_turn>", "<end_of_turn>"];
+            return ["<end_of_turn>", "<start_of_turn>"];
         }
         
-        // TinyLlama - use aggressive stop tokens to prevent rambling and repetition
+        // TinyLlama - use ChatML special tokens
         else if (model.includes('tinyllama') || model.includes('tiny-llama')) {
-            return ["<|user|>", "<|system|>", "</s>", "\\n\\n", " #", "😊", "🤗", "🎉", "❤️", "User:", "Assistant:", "How about you?", "I'm doing"];
+            return ["</s>", "<|user|>", "<|system|>", "<|assistant|>"];
         }
         
-        // Vicuna
-        else if (model.includes('vicuna')) {
-            return ["USER:", "ASSISTANT:", "</s>"];
-        }
-        
-        // Alpaca
-        else if (model.includes('alpaca')) {
-            return ["### Instruction:", "### Response:"];
-        }
-        
-        // CodeLlama
+        // CodeLlama - use Llama 2 tokens
         else if (model.includes('codellama') || model.includes('code-llama')) {
-            return ["[INST]", "</s>", "<s>", "[/INST] [INST]"];
+            return ["</s>", "[INST]"];
         }
         
-        // Default generic stop tokens - use patterns that indicate new turn
+        // Default generic stop tokens for unknown models
         else {
             return ["\\n\\nUser:", "\\n\\nAssistant:"];
         }
+    }
+    
+    optimizeSettingsForModel() {
+        // This function can be used to optimize settings based on model
+        // Currently disabled to use user-configured defaults
+        console.log('Model-specific optimization disabled - using user defaults');
     }
 
     // ============ Resize Functionality ============

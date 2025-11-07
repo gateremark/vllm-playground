@@ -38,15 +38,11 @@
                             <optgroup label="🖥️ CPU-Friendly Models">
                                 <option value="TinyLlama/TinyLlama-1.1B-Chat-v1.0" selected>TinyLlama 1.1B Chat (Fast, No token)</option>
                                 <option value="meta-llama/Llama-3.2-1B">Llama 3.2 1B (Gated, needs HF token)</option>
-                                <option value="google/gemma-2-2b">Gemma 2 2B (Gated, needs HF token)</option>
-                                <option value="facebook/opt-125m">OPT 125M (Tiny test model)</option>
-                                <option value="facebook/opt-1.3b">OPT 1.3B</option>
                             </optgroup>
                             <!-- Larger Models (Slower on CPU) -->
                             <optgroup label="🎮 GPU-Optimized Models (Slow on CPU)">
-                                <option value="meta-llama/Llama-2-7b-chat-hf">Llama 2 7B Chat (Gated)</option>
                                 <option value="mistralai/Mistral-7B-Instruct-v0.2">Mistral 7B Instruct</option>
-                                <option value="codellama/CodeLlama-7b-Instruct-hf">CodeLlama 7B Instruct</option>
+                                <option value="RedHatAI/Llama-3.1-8B-Instruct">Llama 3.1 8B Instruct (Gated, needs HF token)</option>
                             </optgroup>
                         </select>
                         <small class="form-help">All models support chat interface. Gated models require HF token below.</small>
@@ -57,7 +53,7 @@
                     <div class="form-group">
                         <label for="hf-token">HuggingFace Token (Optional)</label>
                         <input type="password" id="hf-token" class="form-control" placeholder="hf_xxxxxxxxxxxxx">
-                        <small class="form-help">Required for gated models (Llama, Gemma). Get token from <a href="https://huggingface.co/settings/tokens" target="_blank">HuggingFace Settings</a></small>
+                        <small class="form-help">Required for gated models (Llama 3.1, Llama 3.2). Get token from <a href="https://huggingface.co/settings/tokens" target="_blank">HuggingFace Settings</a></small>
                     </div>
 
                     <!-- CPU/GPU Mode Toggle -->
@@ -140,23 +136,25 @@
                     <!-- Advanced: Chat Template Settings -->
                     <div class="template-settings-section">
                         <div class="template-settings-header" id="template-settings-toggle">
-                            <h3>Chat Template Settings (Advanced)</h3>
+                            <h3>Chat Template Reference (Advanced)</h3>
                             <span class="toggle-icon">▼</span>
                         </div>
                         <div class="template-settings-content" id="template-settings-content" style="display: none;">
-                            <div class="form-group">
-                                <label for="chat-template">Chat Template (Jinja2) <span style="color: #f59e0b; font-size: 0.85em;">⚠️ Requires Restart</span></label>
-                                <textarea id="chat-template" class="form-control template-textarea" rows="4" spellcheck="false" placeholder="Auto-detected based on model..."></textarea>
-                                <small class="form-help">Auto-detected for known models. Edit to customize. Uses Jinja2 syntax. <strong>Note:</strong> Chat template is baked into the vLLM server at startup - restart server to apply changes.</small>
+                            <div class="info-box" style="background: #1e40af20; border-left: 3px solid #1e40af; padding: 10px; margin-bottom: 15px; border-radius: 4px;">
+                                <strong>ℹ️ Note:</strong> vLLM automatically loads chat templates and stop tokens from each model's tokenizer config. The fields below show reference templates for documentation purposes only. Modern models (2023+) all have built-in templates that work correctly.
                             </div>
                             
                             <div class="form-group">
-                                <label for="stop-tokens">Stop Tokens (comma-separated) <span style="color: #10b981; font-size: 0.85em;">✓ Live Edit</span></label>
-                                <input type="text" id="stop-tokens" class="form-control" placeholder="Auto-detected based on model...">
-                                <small class="form-help">Tokens that signal end of response. Example: &lt;|user|&gt;, &lt;|system|&gt;, &lt;/s&gt;. <strong>Changes take effect immediately</strong> on your next chat message.</small>
+                                <label for="chat-template">Chat Template (Jinja2) <span style="color: #10b981; font-size: 0.85em;">🔄 Reference Only</span></label>
+                                <textarea id="chat-template" class="form-control template-textarea" rows="4" spellcheck="false" placeholder="Will be loaded from model's tokenizer config..." readonly></textarea>
+                                <small class="form-help">vLLM automatically uses the model's chat template from tokenizer config. Shown for reference only.</small>
                             </div>
                             
-                            <button id="reset-template-btn" class="btn btn-secondary btn-sm" style="width: 100%; margin-top: 10px;">Reset to Auto-Detected</button>
+                            <div class="form-group">
+                                <label for="stop-tokens">Stop Tokens (comma-separated) <span style="color: #10b981; font-size: 0.85em;">🔄 Reference Only</span></label>
+                                <input type="text" id="stop-tokens" class="form-control" placeholder="Will be loaded from model's tokenizer config..." readonly>
+                                <small class="form-help">vLLM automatically handles stop tokens via chat template. Shown for reference only. Use 'custom_stop_tokens' in server config to override.</small>
+                            </div>
                         </div>
                     </div>
 
@@ -216,20 +214,20 @@
                     </div>
 
                     <div class="chat-input-area">
-                        <!-- System Prompt (Optional) -->
+                        <!-- System Prompt -->
                         <div class="system-prompt-section">
                             <div class="system-prompt-header">
-                                <label for="system-prompt">System Prompt (Optional):</label>
+                                <label for="system-prompt">System Prompt:</label>
                                 <button id="clear-system-prompt-btn" class="btn btn-secondary btn-sm" style="min-width: 80px; padding: 6px 16px;" title="Clear system prompt">Clear</button>
                             </div>
-                            <textarea id="system-prompt" class="system-prompt-input" rows="2">You are a helpful assistant. Provide brief, direct answers without emojis or hashtags.</textarea>
-                            <small class="form-help">Set behavior for the model. Applied at start of conversation.</small>
+                            <textarea id="system-prompt" class="system-prompt-input" rows="2" placeholder="Set system prompt (e.g., 'You are a helpful coding assistant')">You are a helpful assistant.</textarea>
+                            <small class="form-help">💡 System prompt is sent with every message. Clear or simplify for small models (TinyLlama) if responses are poor.</small>
                         </div>
                         
                         <div class="generation-params">
                             <div class="param-group">
-                                <label for="temperature">Temperature: <span id="temp-value">0.3</span></label>
-                                <input type="range" id="temperature" min="0" max="1" step="0.05" value="0.3">
+                                <label for="temperature">Temperature: <span id="temp-value">0.7</span></label>
+                                <input type="range" id="temperature" min="0" max="1" step="0.05" value="0.7">
                             </div>
                             <div class="param-group">
                                 <label for="max-tokens">Max Tokens: <span id="tokens-value">256</span></label>
