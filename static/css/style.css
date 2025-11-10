@@ -224,6 +224,7 @@ body {
 .sidebar {
     width: 420px;
     flex-shrink: 0;
+    overflow: visible;
 }
 
 .chat-section {
@@ -235,6 +236,7 @@ body {
 .logs-section {
     width: 400px;
     flex-shrink: 0;
+    overflow: visible;
 }
 
 .metrics-section {
