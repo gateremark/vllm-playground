@@ -1491,8 +1491,9 @@ body {
 .compression-section .panel {
     overflow-y: visible;
     overflow-x: hidden;
-    height: 100%;
+    height: auto;
     max-height: none;
+    min-height: 800px;
     min-width: 0;
 }
 
