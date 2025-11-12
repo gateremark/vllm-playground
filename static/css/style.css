@@ -1480,17 +1480,20 @@ body {
     padding: 0;
     margin-bottom: 40px;
     box-shadow: var(--shadow);
-    min-height: 900px;
+    min-height: 600px;
     height: auto;
     max-height: none;
     overflow: visible;
     position: relative;
+    width: 100%;
 }
 
 .compression-section .panel {
     overflow-y: visible;
+    overflow-x: hidden;
     height: 100%;
     max-height: none;
+    min-width: 0;
 }
 
 .compression-controls {
@@ -1501,9 +1504,10 @@ body {
 /* Two-Column Layout */
 .compression-content-layout {
     display: grid;
-    grid-template-columns: 45% 55%;
+    grid-template-columns: minmax(400px, 1fr) minmax(500px, 1.2fr);
     gap: 0;
-    min-height: 850px;
+    min-height: 600px;
+    width: 100%;
 }
 
 .compression-left-column {
@@ -1511,14 +1515,18 @@ body {
     display: flex;
     flex-direction: column;
     overflow-y: auto;
-    max-height: none;
+    overflow-x: hidden;
+    max-height: 900px;
+    min-width: 0;
 }
 
 .compression-right-column {
     display: flex;
     flex-direction: column;
     overflow-y: auto;
-    max-height: none;
+    overflow-x: hidden;
+    max-height: 900px;
+    min-width: 0;
 }
 
 /* Default order when advanced options are collapsed */
@@ -1545,6 +1553,8 @@ body {
     flex: 0 0 auto;
     position: relative;
     overflow: visible;
+    overflow-x: hidden;
+    max-height: 300px;
 }
 
 /* Resize handle for presets section */
@@ -1572,9 +1582,10 @@ body {
 
 .presets-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     gap: 8px;
     overflow: visible;
+    width: 100%;
 }
 
 .preset-card {
@@ -1639,16 +1650,20 @@ body {
     order: 1;
     transition: all 0.3s ease;
     overflow: visible;
+    overflow-x: hidden;
+    min-height: 300px;
 }
 
 /* When advanced options are collapsed, compress the config section */
 .compression-right-column:not(.advanced-expanded) .compression-config {
     flex: 0 0 auto;
+    min-height: 300px;
 }
 
 /* When advanced options are expanded, allow config to grow */
 .compression-right-column.advanced-expanded .compression-config {
     flex: 1 1 auto;
+    min-height: 400px;
 }
 
 .compression-config h3 {
@@ -1739,8 +1754,9 @@ body {
     flex: 1 1 auto;
     display: flex;
     flex-direction: column;
-    min-height: 200px;
+    min-height: 180px;
     overflow: visible;
+    overflow-x: hidden;
 }
 
 .command-preview-header {
@@ -1778,29 +1794,30 @@ body {
 }
 
 .compression-status-display {
-    padding: 20px 20px 40px 20px;
+    padding: 20px;
     border-bottom: 1px solid var(--border-color);
     order: 2;
     transition: all 0.3s ease;
     flex: 1 1 auto;
-    min-height: 600px;
+    min-height: 400px;
     display: flex;
     flex-direction: column;
     overflow-y: visible;
+    overflow-x: hidden;
 }
 
 /* When advanced options are collapsed, give more space to progress */
 .compression-right-column:not(.advanced-expanded) .compression-status-display {
     flex: 1 1 auto;
     background: var(--bg-primary);
-    min-height: 600px;
+    min-height: 400px;
 }
 
 /* When advanced options are expanded, compress the progress section */
 .compression-right-column.advanced-expanded .compression-status-display {
     flex: 0 1 auto;
     order: 3;
-    min-height: 500px;
+    min-height: 300px;
 }
 
 .status-header {
@@ -2070,7 +2087,25 @@ body {
     margin: 20px;
 }
 
+/* Ensure compression section content is visible */
+#compression-section-content {
+    width: 100%;
+    min-height: 600px;
+}
+
 /* Responsive Compression Section */
+@media (max-width: 1600px) {
+    .compression-content-layout {
+        grid-template-columns: minmax(380px, 1fr) minmax(480px, 1.2fr);
+    }
+}
+
+@media (max-width: 1400px) {
+    .compression-content-layout {
+        grid-template-columns: minmax(350px, 1fr) minmax(450px, 1.2fr);
+    }
+}
+
 @media (max-width: 1200px) {
     .compression-content-layout {
         grid-template-columns: 1fr;
@@ -2079,14 +2114,30 @@ body {
     .compression-left-column {
         border-right: none;
         border-bottom: 1px solid var(--border-color);
+        max-height: 500px;
+    }
+    
+    .compression-right-column {
+        max-height: 600px;
     }
     
     .presets-grid {
-        grid-template-columns: repeat(3, 1fr);
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     }
     
     .advanced-grid {
         grid-template-columns: 1fr 1fr;
+    }
+}
+
+@media (max-width: 900px) {
+    .compression-content-layout {
+        grid-template-columns: 1fr;
+        min-height: auto;
+    }
+    
+    .presets-grid {
+        grid-template-columns: repeat(2, 1fr);
     }
 }
 
@@ -2110,6 +2161,11 @@ body {
     
     .size-arrow {
         transform: rotate(90deg);
+    }
+    
+    .compression-left-column,
+    .compression-right-column {
+        max-height: none;
     }
 }
 

@@ -7,20 +7,55 @@ import sys
 import psutil
 from pathlib import Path
 
-# PID file location
-PID_FILE = Path(__file__).parent.parent / ".vllm_playground.pid"
+# PID file location - must match run.py
+# Both scripts should reference the same workspace root
+WORKSPACE_ROOT = Path(__file__).parent.parent
+PID_FILE = WORKSPACE_ROOT / ".vllm_playground.pid"
+
+
+def find_process_by_port(port: int = 7860):
+    """Find process using a specific port"""
+    try:
+        for conn in psutil.net_connections(kind='inet'):
+            if conn.laddr.port == port and conn.status == 'LISTEN':
+                try:
+                    proc = psutil.Process(conn.pid)
+                    return proc
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+    except (psutil.AccessDenied, AttributeError):
+        # Some systems require elevated privileges for net_connections
+        pass
+    return None
 
 
 def find_playground_processes():
     """Find all vLLM Playground processes"""
     processes = []
+    pids_seen = set()
+    
+    # Method 1: Search by command line
     for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
         try:
             cmdline = ' '.join(proc.info['cmdline'] or [])
-            if 'run.py' in cmdline or ('vllm-playground' in cmdline and 'python' in proc.info['name'].lower()):
-                processes.append(proc)
+            if 'run.py' in cmdline or 'app.py' in cmdline or ('vllm-playground' in cmdline and 'python' in proc.info['name'].lower()):
+                if proc.pid not in pids_seen:
+                    processes.append(proc)
+                    pids_seen.add(proc.pid)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
+    
+    # Method 2: Check port 7860
+    port_proc = find_process_by_port(7860)
+    if port_proc and port_proc.pid not in pids_seen:
+        try:
+            cmdline = ' '.join(port_proc.cmdline())
+            if 'python' in cmdline.lower():
+                processes.append(port_proc)
+                pids_seen.add(port_proc.pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    
     return processes
 
 

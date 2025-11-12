@@ -220,3 +220,25 @@ podman build --no-cache -f containers/Containerfile.minimal -t vllm-playground:m
 ### Container starts but dependencies missing?
 
 This is expected for minimal/lightweight variants. Follow the installation instructions shown when the container starts, or check the startup script at `/home/vllm/start.sh`.
+
+### "Address already in use" error when rerunning?
+
+If you lose connection and try to restart the playground:
+
+```
+ERROR: [Errno 98] error while attempting to bind on address ('0.0.0.0', 7860): address already in use
+```
+
+**Quick Fix**: Simply rerun the script - it will automatically detect and kill the old process:
+
+```bash
+python run.py
+```
+
+**Manual Fix**: Use the kill script:
+
+```bash
+python scripts/kill_playground.py
+```
+
+For detailed troubleshooting, see: [Container Troubleshooting Guide](../docs/CONTAINER_TROUBLESHOOTING.md)

@@ -265,6 +265,22 @@ Use CPU mode with proper environment variables. See [docs/MACOS_CPU_GUIDE.md](do
 
 Check browser console (F12) for errors and ensure the server is running.
 
+### Container: "Address Already in Use" Error
+
+If you lose connection to a container and get `ERROR: address already in use` when rerunning:
+
+**Quick Fix:** Just rerun the script - it now auto-detects and kills the old process:
+```bash
+python run.py
+```
+
+**Alternative:** Use the restart script:
+```bash
+./scripts/restart_playground.sh
+```
+
+See [docs/CONTAINER_TROUBLESHOOTING.md](docs/CONTAINER_TROUBLESHOOTING.md) for details.
+
 ---
 
 Made with ❤️ for the vLLM community
