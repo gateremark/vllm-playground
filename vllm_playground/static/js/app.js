@@ -1,4 +1,7 @@
 // vLLM Playground - Main JavaScript
+import { initMCPModule } from './modules/mcp.js';
+import { initGuideLLMModule } from './modules/guidellm.js';
+
 class VLLMWebUI {
     constructor() {
         this.ws = null;
@@ -28,6 +31,17 @@ class VLLMWebUI {
         
         // Theme state
         this.currentTheme = localStorage.getItem('vllm-theme') || 'dark';
+        
+        // GuideLLM state
+        this.guidellmAvailable = false;
+        
+        // MCP (Model Context Protocol) state
+        this.mcpAvailable = false;
+        this.mcpConfigs = [];           // All configured MCP servers
+        this.mcpSelectedServers = [];   // Servers selected for chat
+        this.mcpEnabled = false;        // Whether MCP is enabled in chat
+        this.mcpTools = [];             // Tools from selected servers
+        this.mcpPresets = [];           // Built-in presets
         
         this.init();
     }
@@ -251,10 +265,9 @@ class VLLMWebUI {
         // Initialize chat template for default model (silent mode - no notification)
         this.updateTemplateForModel(true);
         
-        // Initialize benchmark command preview
-        this.updateBenchmarkCommandPreview();
+        // NOTE: Benchmark command preview is initialized by GuideLLM module
         
-        // Check feature availability
+        // Check feature availability (also initializes GuideLLM and MCP modules)
         this.checkFeatureAvailability();
         
         // Connect WebSocket for logs
@@ -406,6 +419,11 @@ class VLLMWebUI {
                     // Update benchmark server status
                     this.updateBenchmarkServerStatus();
                     break;
+                case 'mcp-config':
+                    viewTitle.innerHTML = '<span class="view-title-icon icon-mcp-header"></span> MCP Servers';
+                    // Refresh MCP config view
+                    this.refreshMCPConfigView();
+                    break;
                 default:
                     viewTitle.textContent = viewId;
             }
@@ -456,37 +474,7 @@ class VLLMWebUI {
         this.showNotification(`Switched to ${newTheme} mode`, 'info');
     }
     
-    updateBenchmarkServerStatus() {
-        const statusBanner = document.getElementById('benchmark-server-status');
-        if (!statusBanner) return;
-        
-        if (this.serverRunning && this.serverReady) {
-            statusBanner.classList.add('connected');
-            statusBanner.innerHTML = `
-                <div class="server-status-content">
-                    <span class="status-icon">✅</span>
-                    <span class="status-message">vLLM server is running and ready for benchmarks</span>
-                </div>
-            `;
-        } else if (this.serverRunning) {
-            statusBanner.classList.remove('connected');
-            statusBanner.innerHTML = `
-                <div class="server-status-content">
-                    <span class="status-icon">⏳</span>
-                    <span class="status-message">vLLM server is starting up...</span>
-                </div>
-            `;
-        } else {
-            statusBanner.classList.remove('connected');
-            statusBanner.innerHTML = `
-                <div class="server-status-content">
-                    <span class="status-icon">⚠️</span>
-                    <span class="status-message">Start the vLLM server first to run benchmarks</span>
-                    <button class="btn btn-primary btn-sm" onclick="window.vllmUI.switchView('vllm-server')">Go to Server →</button>
-                </div>
-            `;
-        }
-    }
+    // NOTE: updateBenchmarkServerStatus is injected by GuideLLM module
 
     initToolCalling() {
         // Initialize popover system
@@ -1124,35 +1112,7 @@ number ::= [0-9]+`
         // Copy command button
         this.elements.copyCommandBtn.addEventListener('click', () => this.copyCommand());
         
-        // Benchmark
-        this.elements.runBenchmarkBtn.addEventListener('click', () => this.runBenchmark());
-        this.elements.stopBenchmarkBtn.addEventListener('click', () => this.stopBenchmark());
-        
-        // Benchmark config changes - update command preview
-        const benchmarkConfigElements = [
-            this.elements.benchmarkRequests,
-            this.elements.benchmarkRate,
-            this.elements.benchmarkPromptTokens,
-            this.elements.benchmarkOutputTokens,
-            this.elements.host,  // Also update when host changes
-            this.elements.port   // Also update when port changes
-        ];
-        
-        benchmarkConfigElements.forEach(element => {
-            element.addEventListener('input', () => this.updateBenchmarkCommandPreview());
-            element.addEventListener('change', () => this.updateBenchmarkCommandPreview());
-        });
-        
-        // Benchmark method toggle
-        this.elements.benchmarkMethodBuiltin.addEventListener('change', () => this.updateBenchmarkCommandPreview());
-        this.elements.benchmarkMethodGuidellm.addEventListener('change', () => this.updateBenchmarkCommandPreview());
-        
-        // Copy benchmark command button
-        this.elements.copyBenchmarkCommandBtn.addEventListener('click', () => this.copyBenchmarkCommand());
-        this.elements.copyGuidellmOutputBtn.addEventListener('click', () => this.copyGuidellmOutput());
-        this.elements.toggleRawOutputBtn.addEventListener('click', () => this.toggleRawOutput());
-        this.elements.copyGuidellmJsonBtn.addEventListener('click', () => this.copyGuidellmJson());
-        this.elements.toggleJsonOutputBtn.addEventListener('click', () => this.toggleJsonOutput());
+        // NOTE: Benchmark listeners are set up in GuideLLM module (modules/guidellm.js)
         
         // Template Settings
         this.elements.templateSettingsToggle.addEventListener('click', () => this.toggleTemplateSettings());
@@ -1219,6 +1179,14 @@ number ::= [0-9]+`
                 
                 console.warn('GuideLLM is not available. Install with: pip install guidellm');
             }
+            
+            // Handle MCP availability
+            this.mcpAvailable = features.mcp || false;
+            initMCPModule(this);
+            
+            // Handle GuideLLM availability
+            this.guidellmAvailable = features.guidellm || false;
+            initGuideLLMModule(this);
             
             // Check hardware capabilities
             await this.checkHardwareCapabilities();
@@ -2725,6 +2693,93 @@ number ::= [0-9]+`
         return toast;
     }
 
+    /**
+     * Show a custom confirm dialog (replaces window.confirm)
+     * @param {Object} options - Configuration options
+     * @param {string} options.title - Dialog title
+     * @param {string} options.message - Dialog message
+     * @param {string} options.confirmText - Confirm button text (default: "Confirm")
+     * @param {string} options.cancelText - Cancel button text (default: "Cancel")
+     * @param {string} options.icon - Icon emoji (default: "⚠️")
+     * @param {string} options.type - Button type: "danger", "warning", "primary" (default: "danger")
+     * @returns {Promise<boolean>} - Resolves to true if confirmed, false if cancelled
+     */
+    showConfirm(options = {}) {
+        return new Promise((resolve) => {
+            const {
+                title = 'Confirm Action',
+                message = 'Are you sure you want to proceed?',
+                confirmText = 'Confirm',
+                cancelText = 'Cancel',
+                icon = '⚠️',
+                type = 'danger'
+            } = options;
+
+            const modal = document.getElementById('confirm-modal');
+            const overlay = document.getElementById('confirm-modal-overlay');
+            const iconEl = document.getElementById('confirm-modal-icon');
+            const titleEl = document.getElementById('confirm-modal-title');
+            const messageEl = document.getElementById('confirm-modal-message');
+            const confirmBtn = document.getElementById('confirm-modal-confirm');
+            const cancelBtn = document.getElementById('confirm-modal-cancel');
+
+            if (!modal) {
+                console.warn('Confirm modal not found, falling back to window.confirm');
+                resolve(window.confirm(message));
+                return;
+            }
+
+            // Set content
+            iconEl.textContent = icon;
+            titleEl.textContent = title;
+            messageEl.textContent = message;
+            confirmBtn.textContent = confirmText;
+            cancelBtn.textContent = cancelText;
+
+            // Set button type
+            confirmBtn.className = `btn btn-${type}`;
+
+            // Show modal
+            modal.style.display = 'flex';
+
+            // Cleanup function
+            const cleanup = () => {
+                modal.style.display = 'none';
+                confirmBtn.removeEventListener('click', handleConfirm);
+                cancelBtn.removeEventListener('click', handleCancel);
+                overlay.removeEventListener('click', handleCancel);
+                document.removeEventListener('keydown', handleKeydown);
+            };
+
+            const handleConfirm = () => {
+                cleanup();
+                resolve(true);
+            };
+
+            const handleCancel = () => {
+                cleanup();
+                resolve(false);
+            };
+
+            const handleKeydown = (e) => {
+                if (e.key === 'Escape') {
+                    handleCancel();
+                } else if (e.key === 'Enter') {
+                    handleConfirm();
+                }
+            };
+
+            // Add event listeners
+            confirmBtn.addEventListener('click', handleConfirm);
+            cancelBtn.addEventListener('click', handleCancel);
+            overlay.addEventListener('click', handleCancel);
+            document.addEventListener('keydown', handleKeydown);
+
+            // Focus confirm button
+            confirmBtn.focus();
+        });
+    }
+
     updateChatMetrics(metrics) {
         // Update all metric displays
         const promptTokensEl = document.getElementById('metric-prompt-tokens');
@@ -2885,6 +2940,9 @@ number ::= [0-9]+`
                 parser = 'internlm';
             } else if (model.includes('granite')) {
                 parser = 'granite-20b-fc';
+            } else {
+                // Default fallback - use hermes as a general-purpose parser
+                parser = 'hermes';
             }
         }
         
@@ -2893,10 +2951,10 @@ number ::= [0-9]+`
             this.elements.toolServerWarning.style.display = toolCallingEnabled ? 'none' : 'flex';
         }
         if (this.elements.toolServerStatus) {
-            if (toolCallingEnabled && parser) {
+            if (toolCallingEnabled) {
                 this.elements.toolServerStatus.style.display = 'flex';
                 if (this.elements.toolParserDisplay) {
-                    this.elements.toolParserDisplay.textContent = parser;
+                    this.elements.toolParserDisplay.textContent = parser || 'auto';
                 }
             } else {
                 this.elements.toolServerStatus.style.display = 'none';
@@ -2912,7 +2970,7 @@ number ::= [0-9]+`
         
         controlElements.forEach(el => {
             if (el) {
-                if (toolCallingEnabled && parser) {
+                if (toolCallingEnabled) {
                     el.classList.remove('tool-controls-disabled');
                 } else {
                     el.classList.add('tool-controls-disabled');
@@ -3066,444 +3124,9 @@ number ::= [0-9]+`
         }
     }
 
-    async runBenchmark() {
-        if (!this.serverRunning) {
-            this.showNotification('Server must be running to benchmark', 'warning');
-            return;
-        }
-
-        const config = {
-            total_requests: parseInt(this.elements.benchmarkRequests.value),
-            request_rate: parseFloat(this.elements.benchmarkRate.value),
-            prompt_tokens: parseInt(this.elements.benchmarkPromptTokens.value),
-            output_tokens: parseInt(this.elements.benchmarkOutputTokens.value),
-            use_guidellm: this.elements.benchmarkMethodGuidellm.checked
-        };
-
-        this.benchmarkRunning = true;
-        this.benchmarkStartTime = Date.now();
-        this.elements.runBenchmarkBtn.disabled = true;
-        this.elements.runBenchmarkBtn.style.display = 'none';
-        this.elements.stopBenchmarkBtn.disabled = false;
-        this.elements.stopBenchmarkBtn.style.display = 'inline-block';
-
-        // Hide placeholder, show progress
-        this.elements.metricsDisplay.style.display = 'none';
-        this.elements.metricsGrid.style.display = 'none';
-        this.elements.benchmarkProgress.style.display = 'block';
-
-        try {
-            const response = await fetch('/api/benchmark/start', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(config)
-            });
-
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || 'Failed to start benchmark');
-            }
-
-            // Start polling for status
-            this.benchmarkPollInterval = setInterval(() => this.pollBenchmarkStatus(), 1000);
-
-        } catch (err) {
-            console.error('Failed to start benchmark:', err);
-            this.showNotification(`Failed to start benchmark: ${err.message}`, 'error');
-            this.resetBenchmarkUI();
-        }
-    }
-
-    async stopBenchmark() {
-        try {
-            await fetch('/api/benchmark/stop', {method: 'POST'});
-            this.showNotification('Benchmark stopped', 'info');
-        } catch (err) {
-            console.error('Failed to stop benchmark:', err);
-        }
-        this.resetBenchmarkUI();
-    }
-
-    async pollBenchmarkStatus() {
-        try {
-            const response = await fetch('/api/benchmark/status');
-            const data = await response.json();
-            
-            console.log('[POLL] Benchmark status:', data);
-
-            if (data.running) {
-                // GuideLLM doesn't output real-time progress, so we estimate based on time
-                const elapsed = Date.now() - this.benchmarkStartTime;
-                const estimated = (this.elements.benchmarkRequests.value / this.elements.benchmarkRate.value) * 1000;
-                
-                // Use a smoother curve that goes up to 98% (leaving 2% for completion)
-                let progress;
-                if (elapsed < estimated) {
-                    // Linear progress up to 90%
-                    progress = (elapsed / estimated) * 90;
-                } else {
-                    // Slow down after estimated time: 90% -> 98% over 2x the time
-                    const overtime = elapsed - estimated;
-                    const slowProgress = 90 + (Math.min(overtime / estimated, 1) * 8);
-                    progress = Math.min(98, slowProgress);
-                }
-                
-                console.log(`[POLL] Estimated progress: ${progress.toFixed(1)}% (${elapsed}ms elapsed, ${estimated}ms estimated)`);
-                
-                this.elements.progressFill.style.width = `${progress}%`;
-                this.elements.progressPercent.textContent = `${progress.toFixed(0)}%`;
-            } else {
-                // Benchmark complete
-                clearInterval(this.benchmarkPollInterval);
-                this.benchmarkPollInterval = null;
-
-                if (data.results) {
-                    console.log('[POLL] Benchmark completed with results');
-                    this.displayBenchmarkResults(data.results);
-                    this.showNotification('Benchmark completed!', 'success');
-                } else {
-                    console.error('[POLL] Benchmark completed but no results:', data);
-                    this.showNotification('Benchmark failed', 'error');
-                }
-
-                this.resetBenchmarkUI();
-            }
-        } catch (err) {
-            console.error('Failed to poll benchmark status:', err);
-        }
-    }
-
-    displayBenchmarkResults(results) {
-        // Hide progress
-        this.elements.benchmarkProgress.style.display = 'none';
-        
-        // Check if this is GuideLLM results (has raw_output) or built-in results
-        const isGuideLLM = results.raw_output && results.raw_output.length > 0;
-
-        // Debug: Log the results to console
-        console.log('=== BENCHMARK RESULTS DEBUG ===');
-        console.log('Full results object:', JSON.stringify(results, null, 2));
-        console.log('Is GuideLLM:', isGuideLLM);
-        console.log('throughput:', results.throughput);
-        console.log('avg_latency:', results.avg_latency);
-        console.log('tokens_per_second:', results.tokens_per_second);
-        console.log('total_tokens:', results.total_tokens);
-        console.log('p50_latency:', results.p50_latency);
-        console.log('p95_latency:', results.p95_latency);
-        console.log('p99_latency:', results.p99_latency);
-        console.log('success_rate:', results.success_rate);
-        console.log('json_output:', results.json_output ? 'Present' : 'Missing');
-        console.log('==============================');
-
-        if (isGuideLLM) {
-            // GuideLLM: Show raw output, hide metrics
-            this.elements.metricsGrid.style.display = 'none';
-            const rawOutputSection = document.getElementById('guidellm-raw-output-section');
-            const rawOutputTextarea = document.getElementById('guidellm-raw-output');
-            const rawOutputContent = this.elements.guidellmRawOutputContent;
-            const toggleBtn = this.elements.toggleRawOutputBtn;
-            const jsonOutputSection = document.getElementById('guidellm-json-output-section');
-            const jsonOutputPre = document.getElementById('guidellm-json-output');
-            
-            if (rawOutputSection && rawOutputTextarea) {
-                rawOutputTextarea.value = results.raw_output;
-                rawOutputSection.style.display = 'block';
-                // Reset to visible state when new results come in
-                if (rawOutputContent) {
-                    rawOutputContent.style.display = 'block';
-                }
-                if (toggleBtn) {
-                    toggleBtn.textContent = 'Hide';
-                }
-            }
-            
-            // Try to extract and display JSON from results
-            if (results.json_output) {
-                try {
-                    // Parse and format JSON
-                    const jsonData = typeof results.json_output === 'string' 
-                        ? JSON.parse(results.json_output) 
-                        : results.json_output;
-                    
-                    if (jsonOutputSection && jsonOutputPre) {
-                        jsonOutputPre.textContent = JSON.stringify(jsonData, null, 2);
-                        jsonOutputSection.style.display = 'block';
-                        
-                        // Reset to visible state when new results come in
-                        const jsonOutputContent = this.elements.guidellmJsonOutputContent;
-                        const toggleJsonBtn = this.elements.toggleJsonOutputBtn;
-                        if (jsonOutputContent) {
-                            jsonOutputContent.style.display = 'block';
-                        }
-                        if (toggleJsonBtn) {
-                            toggleJsonBtn.textContent = 'Hide';
-                        }
-                    }
-                    
-                    // Also create table view
-                    console.log('[BENCHMARK] Creating table view from JSON data');
-                    this.displayBenchmarkTable(jsonData);
-                } catch (e) {
-                    console.warn('Failed to parse GuideLLM JSON output:', e);
-                    if (jsonOutputSection) {
-                        jsonOutputSection.style.display = 'none';
-                    }
-                }
-            } else {
-                console.warn('[BENCHMARK] No json_output in results');
-                if (jsonOutputSection) {
-                    jsonOutputSection.style.display = 'none';
-                }
-            }
-        } else {
-            // Built-in: Show metrics, hide raw output
-            this.elements.metricsGrid.style.display = 'grid';
-            const rawOutputSection = document.getElementById('guidellm-raw-output-section');
-            const jsonOutputSection = document.getElementById('guidellm-json-output-section');
-            const tableSection = document.getElementById('guidellm-table-section');
-            if (rawOutputSection) {
-                rawOutputSection.style.display = 'none';
-            }
-            if (jsonOutputSection) {
-                jsonOutputSection.style.display = 'none';
-            }
-            if (tableSection) {
-                tableSection.style.display = 'none';
-            }
-
-            // Update metric cards with defensive checks
-            document.getElementById('metric-throughput').textContent = 
-                results.throughput !== undefined ? `${results.throughput.toFixed(2)} req/s` : '-- req/s';
-            document.getElementById('metric-latency').textContent = 
-                results.avg_latency !== undefined ? `${results.avg_latency.toFixed(2)} ms` : '-- ms';
-            document.getElementById('benchmark-tokens-per-sec').textContent = 
-                results.tokens_per_second !== undefined ? `${results.tokens_per_second.toFixed(2)} tok/s` : '-- tok/s';
-            document.getElementById('metric-p50').textContent = 
-                results.p50_latency !== undefined ? `${results.p50_latency.toFixed(2)} ms` : '-- ms';
-            document.getElementById('metric-p95').textContent = 
-                results.p95_latency !== undefined ? `${results.p95_latency.toFixed(2)} ms` : '-- ms';
-            document.getElementById('metric-p99').textContent = 
-                results.p99_latency !== undefined ? `${results.p99_latency.toFixed(2)} ms` : '-- ms';
-            document.getElementById('benchmark-total-tokens').textContent = 
-                results.total_tokens !== undefined ? results.total_tokens.toLocaleString() : '--';
-            document.getElementById('metric-success-rate').textContent = 
-                results.success_rate !== undefined ? `${results.success_rate.toFixed(1)} %` : '-- %';
-
-            // Animate cards
-            document.querySelectorAll('.metric-card').forEach((card, index) => {
-                setTimeout(() => {
-                    card.classList.add('updated');
-                    setTimeout(() => card.classList.remove('updated'), 500);
-                }, index * 50);
-            });
-        }
-    }
-
-    displayBenchmarkTable(jsonData) {
-        console.log('[TABLE] displayBenchmarkTable called with data:', jsonData);
-        
-        const tableSection = document.getElementById('guidellm-table-section');
-        const tableContent = document.getElementById('guidellm-table-content');
-        
-        console.log('[TABLE] Table section element:', tableSection);
-        console.log('[TABLE] Table content element:', tableContent);
-        
-        if (!tableSection || !tableContent) {
-            console.error('[TABLE] Table section or content element not found');
-            return;
-        }
-        
-        if (!jsonData || !jsonData.benchmarks || jsonData.benchmarks.length === 0) {
-            console.warn('[TABLE] No benchmark data in JSON');
-            return;
-        }
-        
-        const benchmark = jsonData.benchmarks[0]; // Get first benchmark
-        console.log('[TABLE] Processing benchmark:', benchmark);
-        
-        let html = '';
-        
-        // Configuration Table
-        html += '<div class="benchmark-table-group">';
-        html += '<h4>⚙️ Configuration</h4>';
-        html += '<table class="benchmark-data-table">';
-        html += '<tbody>';
-        
-        if (benchmark.worker) {
-            html += `<tr><td class="label">Backend Target</td><td class="value">${benchmark.worker.backend_target || 'N/A'}</td></tr>`;
-            html += `<tr><td class="label">Model</td><td class="value">${benchmark.worker.backend_model || 'N/A'}</td></tr>`;
-        }
-        
-        if (benchmark.request_loader) {
-            html += `<tr><td class="label">Data Configuration</td><td class="value">${benchmark.request_loader.data || 'N/A'}</td></tr>`;
-        }
-        
-        if (benchmark.args && benchmark.args.strategy) {
-            html += `<tr><td class="label">Strategy Type</td><td class="value">${benchmark.args.strategy.type_ || 'N/A'}</td></tr>`;
-            html += `<tr><td class="label">Request Rate</td><td class="value">${benchmark.args.strategy.rate || 'N/A'} req/s</td></tr>`;
-        }
-        
-        if (benchmark.args) {
-            html += `<tr><td class="label">Max Requests</td><td class="value">${benchmark.args.max_number || 'N/A'}</td></tr>`;
-        }
-        
-        html += '</tbody></table></div>';
-        
-        // Request Statistics Table
-        if (benchmark.run_stats) {
-            const stats = benchmark.run_stats;
-            const duration = stats.end_time - stats.start_time;
-            
-            html += '<div class="benchmark-table-group">';
-            html += '<h4>📊 Request Statistics</h4>';
-            html += '<table class="benchmark-data-table">';
-            html += '<tbody>';
-            
-            if (stats.requests_made) {
-                html += `<tr><td class="label">Total Requests</td><td class="value">${stats.requests_made.total || 0}</td></tr>`;
-                html += `<tr><td class="label">Successful</td><td class="value success">${stats.requests_made.successful || 0}</td></tr>`;
-                html += `<tr><td class="label">Errored</td><td class="value ${stats.requests_made.errored > 0 ? 'error' : ''}">${stats.requests_made.errored || 0}</td></tr>`;
-                html += `<tr><td class="label">Incomplete</td><td class="value">${stats.requests_made.incomplete || 0}</td></tr>`;
-            }
-            
-            html += `<tr><td class="label">Duration</td><td class="value">${duration.toFixed(2)} seconds</td></tr>`;
-            html += `<tr><td class="label">Avg Request Time</td><td class="value">${(stats.request_time_avg || 0).toFixed(3)} seconds</td></tr>`;
-            html += `<tr><td class="label">Avg Worker Time</td><td class="value">${(stats.worker_time_avg || 0).toFixed(3)} seconds</td></tr>`;
-            html += `<tr><td class="label">Avg Queued Time</td><td class="value">${((stats.queued_time_avg || 0) * 1000).toFixed(2)} ms</td></tr>`;
-            
-            html += '</tbody></table></div>';
-        }
-        
-        // Performance Metrics Table
-        if (benchmark.metrics) {
-            html += '<div class="benchmark-table-group">';
-            html += '<h4>🚀 Performance Metrics</h4>';
-            html += '<table class="benchmark-data-table">';
-            html += '<thead><tr><th>Metric</th><th>Mean</th><th>Median</th><th>Min</th><th>Max</th><th>Std Dev</th></tr></thead>';
-            html += '<tbody>';
-            
-            // Requests per second
-            if (benchmark.metrics.requests_per_second && benchmark.metrics.requests_per_second.successful) {
-                const rps = benchmark.metrics.requests_per_second.successful;
-                html += '<tr>';
-                html += '<td class="label">Requests/Second</td>';
-                html += `<td>${(rps.mean || 0).toFixed(2)}</td>`;
-                html += `<td>${(rps.median || 0).toFixed(2)}</td>`;
-                html += `<td>${(rps.min || 0).toFixed(2)}</td>`;
-                html += `<td>${(rps.max || 0).toFixed(2)}</td>`;
-                html += `<td>${(rps.std_dev || 0).toFixed(2)}</td>`;
-                html += '</tr>';
-            }
-            
-            // Time to first token
-            if (benchmark.metrics.time_to_first_token && benchmark.metrics.time_to_first_token.successful) {
-                const ttft = benchmark.metrics.time_to_first_token.successful;
-                html += '<tr>';
-                html += '<td class="label">Time to First Token (s)</td>';
-                html += `<td>${(ttft.mean || 0).toFixed(3)}</td>`;
-                html += `<td>${(ttft.median || 0).toFixed(3)}</td>`;
-                html += `<td>${(ttft.min || 0).toFixed(3)}</td>`;
-                html += `<td>${(ttft.max || 0).toFixed(3)}</td>`;
-                html += `<td>${(ttft.std_dev || 0).toFixed(3)}</td>`;
-                html += '</tr>';
-            }
-            
-            // Inter token latency
-            if (benchmark.metrics.inter_token_latency && benchmark.metrics.inter_token_latency.successful) {
-                const itl = benchmark.metrics.inter_token_latency.successful;
-                html += '<tr>';
-                html += '<td class="label">Inter-Token Latency (ms)</td>';
-                html += `<td>${((itl.mean || 0) * 1000).toFixed(2)}</td>`;
-                html += `<td>${((itl.median || 0) * 1000).toFixed(2)}</td>`;
-                html += `<td>${((itl.min || 0) * 1000).toFixed(2)}</td>`;
-                html += `<td>${((itl.max || 0) * 1000).toFixed(2)}</td>`;
-                html += `<td>${((itl.std_dev || 0) * 1000).toFixed(2)}</td>`;
-                html += '</tr>';
-            }
-            
-            html += '</tbody></table></div>';
-        }
-        
-        // Token Statistics Table
-        if (benchmark.metrics) {
-            html += '<div class="benchmark-table-group">';
-            html += '<h4>📝 Token Statistics</h4>';
-            html += '<table class="benchmark-data-table">';
-            html += '<tbody>';
-            
-            // Output tokens per second
-            if (benchmark.metrics.output_tokens_per_second && benchmark.metrics.output_tokens_per_second.successful) {
-                const otps = benchmark.metrics.output_tokens_per_second.successful;
-                html += `<tr><td class="label">Output Tokens/Second (Mean)</td><td class="value">${(otps.mean || 0).toFixed(2)}</td></tr>`;
-                html += `<tr><td class="label">Output Tokens/Second (Median)</td><td class="value">${(otps.median || 0).toFixed(2)}</td></tr>`;
-            }
-            
-            // Total tokens per second
-            if (benchmark.metrics.total_tokens_per_second && benchmark.metrics.total_tokens_per_second.successful) {
-                const ttps = benchmark.metrics.total_tokens_per_second.successful;
-                html += `<tr><td class="label">Total Tokens/Second (Mean)</td><td class="value">${(ttps.mean || 0).toFixed(2)}</td></tr>`;
-                html += `<tr><td class="label">Total Tokens/Second (Median)</td><td class="value">${(ttps.median || 0).toFixed(2)}</td></tr>`;
-            }
-            
-            // Request output token counts
-            if (benchmark.metrics.request_output_token_count && benchmark.metrics.request_output_token_count.successful) {
-                const rotc = benchmark.metrics.request_output_token_count.successful;
-                html += `<tr><td class="label">Request Output Tokens (Mean)</td><td class="value">${(rotc.mean || 0).toFixed(0)}</td></tr>`;
-                html += `<tr><td class="label">Request Output Tokens (Total)</td><td class="value">${(rotc.total_sum || 0).toFixed(0)}</td></tr>`;
-            }
-            
-            html += '</tbody></table></div>';
-        }
-        
-        // Latency Percentiles Table
-        if (benchmark.metrics && benchmark.metrics.request_latency && benchmark.metrics.request_latency.successful) {
-            const latency = benchmark.metrics.request_latency.successful;
-            if (latency.percentiles) {
-                html += '<div class="benchmark-table-group">';
-                html += '<h4>📈 Request Latency Percentiles</h4>';
-                html += '<table class="benchmark-data-table">';
-                html += '<thead><tr><th>Percentile</th><th>Latency (seconds)</th><th>Latency (ms)</th></tr></thead>';
-                html += '<tbody>';
-                
-                const percentiles = [
-                    { name: 'P50 (Median)', key: 'p50' },
-                    { name: 'P75', key: 'p75' },
-                    { name: 'P90', key: 'p90' },
-                    { name: 'P95', key: 'p95' },
-                    { name: 'P99', key: 'p99' },
-                    { name: 'P99.9', key: 'p999' }
-                ];
-                
-                percentiles.forEach(p => {
-                    if (latency.percentiles[p.key] !== undefined) {
-                        const val = latency.percentiles[p.key];
-                        html += `<tr><td class="label">${p.name}</td><td>${val.toFixed(3)}</td><td>${(val * 1000).toFixed(2)}</td></tr>`;
-                    }
-                });
-                
-                html += '</tbody></table></div>';
-            }
-        }
-        
-        tableContent.innerHTML = html;
-        tableSection.style.display = 'block';
-        console.log('[TABLE] Table displayed successfully');
-    }
-
-    resetBenchmarkUI() {
-        this.benchmarkRunning = false;
-        this.elements.runBenchmarkBtn.disabled = !this.serverRunning;
-        this.elements.runBenchmarkBtn.style.display = 'inline-block';
-        this.elements.stopBenchmarkBtn.disabled = true;
-        this.elements.stopBenchmarkBtn.style.display = 'none';
-        this.elements.progressFill.style.width = '0%';
-        this.elements.progressPercent.textContent = '0%';
-        
-        if (this.benchmarkPollInterval) {
-            clearInterval(this.benchmarkPollInterval);
-            this.benchmarkPollInterval = null;
-        }
-    }
+    // NOTE: Benchmark methods (runBenchmark, stopBenchmark, pollBenchmarkStatus, 
+    // displayBenchmarkResults, displayBenchmarkTable, resetBenchmarkUI) are 
+    // injected by GuideLLM module (modules/guidellm.js)
 
     // ============ Template Settings ============
     toggleTemplateSettings() {
@@ -3981,125 +3604,7 @@ number ::= [0-9]+`
         }
     }
     
-    // ============ Benchmark Command Preview ============
-    
-    updateBenchmarkCommandPreview() {
-        const totalRequests = this.elements.benchmarkRequests.value || '100';
-        const requestRate = this.elements.benchmarkRate.value || '5';
-        const promptTokens = this.elements.benchmarkPromptTokens.value || '100';
-        const outputTokens = this.elements.benchmarkOutputTokens.value || '100';
-        const useGuideLLM = this.elements.benchmarkMethodGuidellm.checked;
-        
-        // Get server configuration
-        const host = this.elements.host?.value || 'localhost';
-        const port = this.elements.port?.value || '8000';
-        const targetUrl = `http://${host}:${port}/v1`;
-        
-        let cmd = '';
-        
-        if (useGuideLLM) {
-            // Build GuideLLM command matching the actual command used in app.py
-            cmd = '# Benchmark using GuideLLM\n';
-            cmd += '# Actual command used by the app:\n';
-            cmd += 'guidellm benchmark';
-            cmd += ` \\\n  --target "${targetUrl}"`;
-            
-            // Add rate configuration
-            if (requestRate && requestRate > 0) {
-                cmd += ` \\\n  --rate-type constant`;
-                cmd += ` \\\n  --rate ${requestRate}`;
-            } else {
-                cmd += ` \\\n  --rate-type sweep`;
-            }
-            
-            // Add request limit
-            cmd += ` \\\n  --max-requests ${totalRequests}`;
-            
-            // Add token configuration in guidellm's data format
-            cmd += ` \\\n  --data "prompt_tokens=${promptTokens},output_tokens=${outputTokens}"`;
-        } else {
-            // Built-in benchmark - show Python API equivalent
-            cmd = '# Built-in benchmark (running in the app)\n';
-            cmd += '# Equivalent Python code:\n';
-            cmd += 'import asyncio\n';
-            cmd += 'import aiohttp\n\n';
-            cmd += 'async def benchmark():\n';
-            cmd += '    config = {\n';
-            cmd += `        "total_requests": ${totalRequests},\n`;
-            cmd += `        "request_rate": ${requestRate},\n`;
-            cmd += `        "prompt_tokens": ${promptTokens},\n`;
-            cmd += `        "output_tokens": ${outputTokens}\n`;
-            cmd += '    }\n';
-            cmd += `    url = "${targetUrl}/chat/completions"\n`;
-            cmd += '    # Send requests at specified rate...\n';
-            cmd += '    # Calculate throughput, latency, tokens/sec...\n\n';
-            cmd += '# The built-in benchmark is faster and simpler\n';
-            cmd += '# Use GuideLLM for advanced features & reports';
-        }
-        
-        this.elements.benchmarkCommandText.value = cmd;
-    }
-    
-    async copyBenchmarkCommand() {
-        const command = this.elements.benchmarkCommandText.value;
-        try {
-            await navigator.clipboard.writeText(command);
-            this.showNotification('Benchmark command copied to clipboard!', 'success');
-        } catch (error) {
-            console.error('Failed to copy:', error);
-            this.showNotification('Failed to copy command', 'error');
-        }
-    }
-
-    async copyGuidellmOutput() {
-        const output = this.elements.guidellmRawOutput.value;
-        try {
-            await navigator.clipboard.writeText(output);
-            this.showNotification('GuideLLM output copied to clipboard!', 'success');
-        } catch (error) {
-            console.error('Failed to copy:', error);
-            this.showNotification('Failed to copy output', 'error');
-        }
-    }
-
-    toggleRawOutput() {
-        const content = this.elements.guidellmRawOutputContent;
-        const btn = this.elements.toggleRawOutputBtn;
-        
-        if (content.style.display === 'none') {
-            content.style.display = 'block';
-            btn.textContent = 'Hide';
-        } else {
-            content.style.display = 'none';
-            btn.textContent = 'Show';
-        }
-    }
-
-    toggleJsonOutput() {
-        const content = this.elements.guidellmJsonOutputContent;
-        const btn = this.elements.toggleJsonOutputBtn;
-        
-        if (content.style.display === 'none') {
-            content.style.display = 'block';
-            btn.textContent = 'Hide';
-        } else {
-            content.style.display = 'none';
-            btn.textContent = 'Show';
-        }
-    }
-
-    async copyGuidellmJson() {
-        const jsonOutput = document.getElementById('guidellm-json-output');
-        if (jsonOutput) {
-            try {
-                await navigator.clipboard.writeText(jsonOutput.textContent);
-                this.showNotification('GuideLLM JSON copied to clipboard!', 'success');
-            } catch (error) {
-                console.error('Failed to copy:', error);
-                this.showNotification('Failed to copy JSON', 'error');
-            }
-        }
-    }
+    // NOTE: Benchmark command preview and copy methods are injected by GuideLLM module
     
     // ===============================================
     // COMMUNITY RECIPES
@@ -4857,7 +4362,14 @@ number ::= [0-9]+`
             return;
         }
         
-        const confirmed = confirm(`Are you sure you want to delete "${this.editingRecipe.name}"?`);
+        const confirmed = await this.showConfirm({
+            title: 'Delete Recipe',
+            message: `Are you sure you want to delete "${this.editingRecipe.name}"? This action cannot be undone.`,
+            confirmText: 'Delete',
+            cancelText: 'Cancel',
+            icon: '🗑️',
+            type: 'danger'
+        });
         if (!confirmed) return;
         
         try {
@@ -5192,10 +4704,19 @@ number ::= [0-9]+`
         }
     }
     
-    clearAllTools() {
+    async clearAllTools() {
         if (this.tools.length === 0) return;
         
-        if (confirm('Remove all tools?')) {
+        const confirmed = await this.showConfirm({
+            title: 'Clear All Tools',
+            message: `Remove all ${this.tools.length} tool(s)? This action cannot be undone.`,
+            confirmText: 'Clear All',
+            cancelText: 'Cancel',
+            icon: '🗑️',
+            type: 'danger'
+        });
+        
+        if (confirmed) {
             this.tools = [];
             this.renderToolsList();
             this.updateToolsCountBadge();
@@ -5347,7 +4868,7 @@ number ::= [0-9]+`
                     return `
                         <div class="tool-call-content">
                             <div class="tool-call-header">
-                                <span class="tool-icon">🔧</span>
+                                <span class="tool-icon"><span class="icon-mcp-tools"></span></span>
                                 <span>${this.escapeHtml(func.name || 'unknown')}</span>
                             </div>
                             <div class="tool-call-args">${this.escapeHtml(argsDisplay)}</div>
@@ -5364,6 +4885,12 @@ number ::= [0-9]+`
         div.textContent = text;
         return div.innerHTML;
     }
+    
+    // ============================================
+    // MCP Module - Methods injected from modules/mcp.js
+    // ============================================
+    // MCP methods are dynamically added via initMCPModule()
+    // See: static/js/modules/mcp.js
 }
 // Add CSS animations for notifications
 const style = document.createElement('style');

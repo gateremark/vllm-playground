@@ -42,6 +42,7 @@ SYNC_FILES = [
     ("assets", "assets", None),
     ("config", "config", None),
     ("recipes", "recipes", None),
+    ("mcp_client", "mcp_client", None),  # MCP client module
 ]
 
 # Files/directories to skip in package (package-specific, don't overwrite)
@@ -70,103 +71,107 @@ def transform_app_py(content: str) -> str:
     3. Add guards for container_manager usage
     """
     
-    # Check if already transformed (has relative import)
-    if "from .container_manager import" in content:
-        print("  ⚠️  app.py already has package transforms, skipping transformation")
-        return content
+    # Check if container_manager already transformed (has relative import)
+    container_manager_already_transformed = "from .container_manager import" in content
     
-    lines = content.split('\n')
-    new_lines = []
-    i = 0
-    
-    while i < len(lines):
-        line = lines[i]
+    if container_manager_already_transformed:
+        print("  ℹ️  container_manager already transformed, skipping those transforms")
+        result = content
+    else:
+        # Apply container_manager transforms
+        lines = content.split('\n')
+        new_lines = []
+        i = 0
         
-        # Transform 1: Add None initialization before try block
-        if line.strip() == "# Import container manager (optional - only needed for container mode)":
-            new_lines.append(line)
-            # Check if next line is 'try:' and add initialization
-            if i + 1 < len(lines) and lines[i + 1].strip() == "try:":
-                new_lines.append("container_manager = None  # Initialize as None for when import fails")
-                new_lines.append(lines[i + 1])
-                i += 2
-                continue
-        
-        # Transform 2: Change to relative import
-        elif "from container_manager import container_manager" in line:
-            new_lines.append(line.replace(
-                "from container_manager import container_manager",
-                "from .container_manager import container_manager"
-            ))
-            i += 1
-            continue
-        
-        # Transform 3: Add container_manager guards for common patterns
-        # Pattern: if current_run_mode == "container":
-        #          status = await container_manager.get_container_status()
-        elif 'if current_run_mode == "container":' in line and "CONTAINER_MODE_AVAILABLE" not in line:
-            # Check if next non-empty line uses container_manager
-            next_idx = i + 1
-            while next_idx < len(lines) and not lines[next_idx].strip():
-                next_idx += 1
+        while i < len(lines):
+            line = lines[i]
             
-            if next_idx < len(lines) and "container_manager." in lines[next_idx]:
-                # Add guards
-                indent = len(line) - len(line.lstrip())
-                new_line = ' ' * indent + 'if current_run_mode == "container" and CONTAINER_MODE_AVAILABLE and container_manager:'
-                new_lines.append(new_line)
+            # Transform 1: Add None initialization before try block
+            if line.strip() == "# Import container manager (optional - only needed for container mode)":
+                new_lines.append(line)
+                # Check if next line is 'try:' and add initialization
+                if i + 1 < len(lines) and lines[i + 1].strip() == "try:":
+                    new_lines.append("container_manager = None  # Initialize as None for when import fails")
+                    new_lines.append(lines[i + 1])
+                    i += 2
+                    continue
+            
+            # Transform 2: Change to relative import
+            elif "from container_manager import container_manager" in line:
+                new_lines.append(line.replace(
+                    "from container_manager import container_manager",
+                    "from .container_manager import container_manager"
+                ))
                 i += 1
                 continue
-        
-        # Pattern: if CONTAINER_MODE_AVAILABLE: (without container_manager check)
-        elif line.strip() == "if CONTAINER_MODE_AVAILABLE:" or \
-             (line.strip().startswith("if CONTAINER_MODE_AVAILABLE") and "container_manager" not in line):
-            # Check if next lines use container_manager
-            next_idx = i + 1
-            while next_idx < len(lines) and not lines[next_idx].strip():
-                next_idx += 1
             
-            if next_idx < len(lines) and "container_manager." in lines[next_idx]:
-                indent = len(line) - len(line.lstrip())
-                new_line = line.rstrip().replace(
-                    "if CONTAINER_MODE_AVAILABLE:",
-                    "if CONTAINER_MODE_AVAILABLE and container_manager:"
-                )
-                new_lines.append(new_line)
-                i += 1
-                continue
-        
-        # Pattern: if current_run_mode == "container" and is_kubernetes:
-        elif 'if current_run_mode == "container" and is_kubernetes:' in line and "container_manager" not in line:
-            # Check if next lines use container_manager
-            next_idx = i + 1
-            while next_idx < len(lines) and not lines[next_idx].strip():
-                next_idx += 1
+            # Transform 3: Add container_manager guards for common patterns
+            # Pattern: if current_run_mode == "container":
+            #          status = await container_manager.get_container_status()
+            elif 'if current_run_mode == "container":' in line and "CONTAINER_MODE_AVAILABLE" not in line:
+                # Check if next non-empty line uses container_manager
+                next_idx = i + 1
+                while next_idx < len(lines) and not lines[next_idx].strip():
+                    next_idx += 1
+                
+                if next_idx < len(lines) and "container_manager." in lines[next_idx]:
+                    # Add guards
+                    indent = len(line) - len(line.lstrip())
+                    new_line = ' ' * indent + 'if current_run_mode == "container" and CONTAINER_MODE_AVAILABLE and container_manager:'
+                    new_lines.append(new_line)
+                    i += 1
+                    continue
             
-            if next_idx < len(lines) and "container_manager" in lines[next_idx]:
+            # Pattern: if CONTAINER_MODE_AVAILABLE: (without container_manager check)
+            elif line.strip() == "if CONTAINER_MODE_AVAILABLE:" or \
+                 (line.strip().startswith("if CONTAINER_MODE_AVAILABLE") and "container_manager" not in line):
+                # Check if next lines use container_manager
+                next_idx = i + 1
+                while next_idx < len(lines) and not lines[next_idx].strip():
+                    next_idx += 1
+                
+                if next_idx < len(lines) and "container_manager." in lines[next_idx]:
+                    indent = len(line) - len(line.lstrip())
+                    new_line = line.rstrip().replace(
+                        "if CONTAINER_MODE_AVAILABLE:",
+                        "if CONTAINER_MODE_AVAILABLE and container_manager:"
+                    )
+                    new_lines.append(new_line)
+                    i += 1
+                    continue
+            
+            # Pattern: if current_run_mode == "container" and is_kubernetes:
+            elif 'if current_run_mode == "container" and is_kubernetes:' in line and "container_manager" not in line:
+                # Check if next lines use container_manager
+                next_idx = i + 1
+                while next_idx < len(lines) and not lines[next_idx].strip():
+                    next_idx += 1
+                
+                if next_idx < len(lines) and "container_manager" in lines[next_idx]:
+                    new_line = line.replace(
+                        'if current_run_mode == "container" and is_kubernetes:',
+                        'if current_run_mode == "container" and is_kubernetes and container_manager:'
+                    )
+                    new_lines.append(new_line)
+                    i += 1
+                    continue
+            
+            # Pattern: if is_kubernetes and hasattr(container_manager
+            elif "if is_kubernetes and hasattr(container_manager" in line and "and container_manager and" not in line:
                 new_line = line.replace(
-                    'if current_run_mode == "container" and is_kubernetes:',
-                    'if current_run_mode == "container" and is_kubernetes and container_manager:'
+                    "if is_kubernetes and hasattr(container_manager",
+                    "if is_kubernetes and container_manager and hasattr(container_manager"
                 )
                 new_lines.append(new_line)
                 i += 1
                 continue
-        
-        # Pattern: if is_kubernetes and hasattr(container_manager
-        elif "if is_kubernetes and hasattr(container_manager" in line and "and container_manager and" not in line:
-            new_line = line.replace(
-                "if is_kubernetes and hasattr(container_manager",
-                "if is_kubernetes and container_manager and hasattr(container_manager"
-            )
-            new_lines.append(new_line)
+            
+            new_lines.append(line)
             i += 1
-            continue
         
-        new_lines.append(line)
-        i += 1
+        result = '\n'.join(new_lines)
     
-    # Additional transforms for robustness
-    result = '\n'.join(new_lines)
+    # Additional transforms for robustness (applied regardless of container_manager state)
     
     # Add guard to read_logs_container function if not present
     if "async def read_logs_container():" in result and "if not container_manager:" not in result:
@@ -181,6 +186,28 @@ def transform_app_py(content: str) -> str:
             'if config.run_mode == "container" and not CONTAINER_MODE_AVAILABLE:',
             'if config.run_mode == "container" and (not CONTAINER_MODE_AVAILABLE or not container_manager):'
         )
+    
+    # Transform MCP imports: Convert absolute imports to relative imports for package
+    # Root uses: from mcp_client import ...
+    # Package needs: from .mcp_client import ...
+    
+    # Transform the main MCP import section
+    result = result.replace(
+        'from mcp_client import MCP_AVAILABLE, MCP_VERSION',
+        'from .mcp_client import MCP_AVAILABLE, MCP_VERSION'
+    )
+    result = result.replace(
+        'from mcp_client.manager import get_mcp_manager',
+        'from .mcp_client.manager import get_mcp_manager'
+    )
+    result = result.replace(
+        'from mcp_client.config import MCPServerConfig, MCPTransport, MCP_PRESETS',
+        'from .mcp_client.config import MCPServerConfig, MCPTransport, MCP_PRESETS'
+    )
+    
+    # Check if transforms were applied
+    if 'from .mcp_client import' in result:
+        print("  ✓ Transformed MCP imports (absolute → relative)")
     
     return result
 

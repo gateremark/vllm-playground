@@ -774,7 +774,8 @@ async def get_features():
     """Check which optional features are available"""
     features = {
         "vllm": True,  # Always available since it's core
-        "guidellm": False
+        "guidellm": False,
+        "mcp": False
     }
     
     # Check guidellm
@@ -784,7 +785,254 @@ async def get_features():
     except ImportError:
         pass
     
+    # Check MCP - available if mcp_client module loaded successfully and mcp SDK installed
+    features["mcp"] = MCP_AVAILABLE
+    
     return features
+
+
+# =============================================================================
+# MCP (Model Context Protocol) API Endpoints
+# =============================================================================
+
+# Import MCP from mcp_client module (renamed to avoid conflict with mcp PyPI package)
+MCP_AVAILABLE = False
+MCP_VERSION = None
+get_mcp_manager = None
+MCPServerConfig = None  
+MCPTransport = None
+MCP_PRESETS = []
+
+try:
+    from .mcp_client import MCP_AVAILABLE, MCP_VERSION
+    if MCP_AVAILABLE:
+        from .mcp_client.manager import get_mcp_manager
+        from .mcp_client.config import MCPServerConfig, MCPTransport, MCP_PRESETS
+        logger.info(f"MCP enabled: version {MCP_VERSION}")
+except ImportError as e:
+    logger.warning(f"MCP client module not available: {e}")
+
+
+class MCPServerConfigRequest(BaseModel):
+    """Request model for creating/updating MCP server configuration"""
+    name: str
+    transport: str = "stdio"  # "stdio" or "sse"
+    command: Optional[str] = None
+    args: Optional[List[str]] = None
+    url: Optional[str] = None
+    env: Optional[Dict[str, str]] = None
+    enabled: bool = True
+    auto_connect: bool = False
+    description: Optional[str] = None
+
+
+class MCPToolCallRequest(BaseModel):
+    """Request model for calling an MCP tool"""
+    tool_name: str
+    arguments: Dict[str, Any] = {}
+
+
+@app.get("/api/mcp/status")
+async def mcp_status():
+    """Get MCP availability and overall status"""
+    if not MCP_AVAILABLE:
+        return {
+            "available": False,
+            "message": "MCP not installed. Run: pip install vllm-playground[mcp]",
+            "version": None,
+            "servers": []
+        }
+    
+    manager = get_mcp_manager()
+    statuses = manager.get_status()
+    
+    return {
+        "available": True,
+        "version": MCP_VERSION,
+        "message": "MCP is available",
+        "servers": [s.model_dump() for s in statuses]
+    }
+
+
+@app.get("/api/mcp/configs")
+async def mcp_list_configs():
+    """List all MCP server configurations"""
+    if not MCP_AVAILABLE:
+        return {"configs": [], "error": "MCP not installed"}
+    
+    manager = get_mcp_manager()
+    configs = manager.list_configs()
+    statuses = {s.name: s for s in manager.get_status()}
+    
+    result = []
+    for config in configs:
+        config_dict = config.model_dump()
+        status = statuses.get(config.name)
+        if status:
+            config_dict["connected"] = status.connected
+            config_dict["tools_count"] = status.tools_count
+            config_dict["error"] = status.error
+        else:
+            config_dict["connected"] = False
+            config_dict["tools_count"] = 0
+            config_dict["error"] = None
+        result.append(config_dict)
+    
+    return {"configs": result}
+
+
+@app.post("/api/mcp/configs")
+async def mcp_save_config(request: MCPServerConfigRequest):
+    """Create or update an MCP server configuration"""
+    if not MCP_AVAILABLE:
+        raise HTTPException(status_code=400, detail="MCP not installed. Run: pip install vllm-playground[mcp]")
+    
+    try:
+        config = MCPServerConfig(
+            name=request.name,
+            transport=MCPTransport(request.transport),
+            command=request.command,
+            args=request.args,
+            url=request.url,
+            env=request.env,
+            enabled=request.enabled,
+            auto_connect=request.auto_connect,
+            description=request.description
+        )
+        
+        manager = get_mcp_manager()
+        manager.save_config(config)
+        
+        return {"success": True, "config": config.model_dump()}
+    except Exception as e:
+        logger.error(f"Failed to save MCP config: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/mcp/configs/{name}")
+async def mcp_delete_config(name: str):
+    """Delete an MCP server configuration"""
+    if not MCP_AVAILABLE:
+        raise HTTPException(status_code=400, detail="MCP not installed")
+    
+    manager = get_mcp_manager()
+    
+    # Disconnect if connected
+    if name in manager.connections:
+        await manager.disconnect(name)
+    
+    success = manager.delete_config(name)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Server '{name}' not found")
+    
+    return {"success": True, "message": f"Server '{name}' deleted"}
+
+
+@app.post("/api/mcp/connect/{name}")
+async def mcp_connect(name: str):
+    """Connect to an MCP server"""
+    if not MCP_AVAILABLE:
+        raise HTTPException(status_code=400, detail="MCP not installed")
+    
+    manager = get_mcp_manager()
+    success = await manager.connect(name)
+    
+    if success:
+        status = manager.get_status(name)[0]
+        return {
+            "success": True,
+            "message": f"Connected to '{name}'",
+            "status": status.model_dump()
+        }
+    else:
+        status = manager.get_status(name)
+        error = status[0].error if status else "Unknown error"
+        raise HTTPException(status_code=400, detail=f"Failed to connect: {error}")
+
+
+@app.post("/api/mcp/disconnect/{name}")
+async def mcp_disconnect(name: str):
+    """Disconnect from an MCP server"""
+    if not MCP_AVAILABLE:
+        raise HTTPException(status_code=400, detail="MCP not installed")
+    
+    manager = get_mcp_manager()
+    success = await manager.disconnect(name)
+    
+    if success:
+        return {"success": True, "message": f"Disconnected from '{name}'"}
+    else:
+        raise HTTPException(status_code=404, detail=f"Server '{name}' not connected")
+
+
+@app.get("/api/mcp/tools")
+async def mcp_get_tools(servers: Optional[str] = None):
+    """
+    Get tools from connected MCP servers in OpenAI format.
+    
+    Query params:
+        servers: Comma-separated list of server names (optional, defaults to all)
+    """
+    if not MCP_AVAILABLE:
+        return {"tools": [], "error": "MCP not installed"}
+    
+    manager = get_mcp_manager()
+    server_list = servers.split(",") if servers else None
+    tools = manager.get_tools(server_list)
+    
+    return {"tools": tools, "count": len(tools)}
+
+
+@app.get("/api/mcp/servers/{name}/details")
+async def mcp_get_server_details(name: str):
+    """
+    Get detailed information about a connected MCP server.
+    Returns tools, resources, and prompts with full schemas.
+    """
+    if not MCP_AVAILABLE:
+        raise HTTPException(status_code=400, detail="MCP not installed")
+    
+    manager = get_mcp_manager()
+    
+    if name not in manager.connections:
+        raise HTTPException(status_code=404, detail=f"Server '{name}' not connected")
+    
+    connection = manager.connections[name]
+    
+    return {
+        "name": name,
+        "connected": connection.connected,
+        "tools": connection.tools,
+        "resources": connection.resources,
+        "prompts": connection.prompts,
+        "error": connection.error
+    }
+
+
+@app.post("/api/mcp/call")
+async def mcp_call_tool(request: MCPToolCallRequest):
+    """Execute a tool call on an MCP server"""
+    if not MCP_AVAILABLE:
+        raise HTTPException(status_code=400, detail="MCP not installed")
+    
+    manager = get_mcp_manager()
+    
+    if not manager.is_mcp_tool(request.tool_name):
+        raise HTTPException(status_code=404, detail=f"Tool '{request.tool_name}' not found")
+    
+    try:
+        result = await manager.call_tool(request.tool_name, request.arguments)
+        return {"success": True, "result": result}
+    except Exception as e:
+        logger.error(f"MCP tool call failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/mcp/presets")
+async def mcp_get_presets():
+    """Get built-in MCP server presets"""
+    # MCP_PRESETS is defined at module level (empty list if MCP not available)
+    return {"presets": MCP_PRESETS}
 
 
 @app.get("/api/hardware-capabilities")
