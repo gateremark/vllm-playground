@@ -29,12 +29,24 @@ logger = logging.getLogger(__name__)
 
 # Import container manager (optional - only needed for container mode)
 container_manager = None  # Initialize as None for when import fails
+CONTAINER_MODE_AVAILABLE = False
 try:
-    from .container_manager import container_manager
-    CONTAINER_MODE_AVAILABLE = True
+    # Try absolute import first (for running from root directory)
+    from container_manager import container_manager
+    # container_manager will be None if no runtime (podman/docker) is available
+    CONTAINER_MODE_AVAILABLE = container_manager is not None
+    if not CONTAINER_MODE_AVAILABLE:
+        logger.warning("No container runtime (podman/docker) found - container mode will be disabled")
 except ImportError:
-    CONTAINER_MODE_AVAILABLE = False
-    logger.warning("container_manager not available - container mode will be disabled")
+    try:
+        # Fall back to relative import (for package mode)
+        from .container_manager import container_manager
+        CONTAINER_MODE_AVAILABLE = container_manager is not None
+        if not CONTAINER_MODE_AVAILABLE:
+            logger.warning("No container runtime (podman/docker) found - container mode will be disabled")
+    except ImportError:
+        CONTAINER_MODE_AVAILABLE = False
+        logger.warning("container_manager not available - container mode will be disabled")
 
 app = FastAPI(title="vLLM Playground", version="1.0.0")
 
@@ -636,8 +648,11 @@ async def get_status() -> ServerStatus:
     
     if current_run_mode == "container":
         # Check container status
-        status = await container_manager.get_container_status()
-        running = status.get('running', False)
+        if container_manager is not None:
+            status = await container_manager.get_container_status()
+            running = status.get('running', False)
+        else:
+            running = False
     elif current_run_mode == "subprocess":
         # Check subprocess status
         if vllm_process is not None:
@@ -775,7 +790,9 @@ async def get_features():
     features = {
         "vllm": True,  # Always available since it's core
         "guidellm": False,
-        "mcp": False
+        "mcp": False,
+        "container_runtime": None,  # Will be 'podman', 'docker', or None
+        "container_mode": CONTAINER_MODE_AVAILABLE
     }
     
     # Check guidellm
@@ -787,6 +804,10 @@ async def get_features():
     
     # Check MCP - available if mcp_client module loaded successfully and mcp SDK installed
     features["mcp"] = MCP_AVAILABLE
+    
+    # Check container runtime
+    if CONTAINER_MODE_AVAILABLE and container_manager:
+        features["container_runtime"] = container_manager.runtime
     
     return features
 

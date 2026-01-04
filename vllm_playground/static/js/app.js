@@ -1188,10 +1188,32 @@ number ::= [0-9]+`
             this.guidellmAvailable = features.guidellm || false;
             initGuideLLMModule(this);
             
+            // Update container runtime status
+            this.updateContainerRuntimeStatus(features.container_runtime, features.container_mode);
+            
             // Check hardware capabilities
             await this.checkHardwareCapabilities();
         } catch (error) {
             console.error('Error checking feature availability:', error);
+        }
+    }
+    
+    updateContainerRuntimeStatus(runtime, available) {
+        const statusEl = document.getElementById('container-runtime-status');
+        if (!statusEl) return;
+        
+        const textEl = statusEl.querySelector('.feature-status-text');
+        
+        statusEl.classList.remove('available', 'unavailable');
+        
+        if (available && runtime) {
+            statusEl.classList.add('available');
+            textEl.textContent = runtime.charAt(0).toUpperCase() + runtime.slice(1);
+            statusEl.title = `Container Runtime: ${runtime} (available)`;
+        } else {
+            statusEl.classList.add('unavailable');
+            textEl.textContent = 'No Runtime';
+            statusEl.title = 'No container runtime available (podman/docker not found)';
         }
     }
     
