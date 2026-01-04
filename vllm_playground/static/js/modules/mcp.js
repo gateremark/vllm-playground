@@ -39,7 +39,7 @@ const MCPMethods = {
         
         // Load MCP configs and presets
         if (this.mcpAvailable) {
-            this.loadMCPConfigs();
+            this.loadMCPConfigs(true);  // Initial load - trigger auto-connect
             this.loadMCPPresets();
         }
         
@@ -154,7 +154,7 @@ const MCPMethods = {
     // Data Loading
     // ============================================
     
-    async loadMCPConfigs() {
+    async loadMCPConfigs(isInitialLoad = false) {
         try {
             const response = await fetch('/api/mcp/configs');
             const data = await response.json();
@@ -163,8 +163,65 @@ const MCPMethods = {
             this.renderMCPServersGrid();
             this.updateMCPChatPanel();
             this.updateMCPBadge();
+            
+            // Auto-connect on initial load
+            if (isInitialLoad) {
+                await this.autoConnectMCPServers();
+            }
         } catch (error) {
             console.error('Failed to load MCP configs:', error);
+        }
+    },
+    
+    async autoConnectMCPServers() {
+        // Safety check: ensure MCP is available
+        if (!this.mcpAvailable) {
+            console.log('MCP not available, skipping auto-connect');
+            return;
+        }
+        
+        // Find servers with auto_connect enabled that are not already connected
+        const serversToConnect = this.mcpConfigs.filter(
+            config => config.auto_connect && config.enabled && !config.connected
+        );
+        
+        if (serversToConnect.length === 0) {
+            return;
+        }
+        
+        console.log(`Auto-connecting to ${serversToConnect.length} MCP server(s)...`);
+        
+        // Connect to each server sequentially to avoid overwhelming the system
+        for (const config of serversToConnect) {
+            try {
+                console.log(`Auto-connecting to MCP server: ${config.name}`);
+                const response = await fetch(`/api/mcp/connect/${encodeURIComponent(config.name)}`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    console.log(`Auto-connected to "${config.name}" - ${result.status?.tools_count || 0} tools available`);
+                    this.showNotification(`Auto-connected to "${config.name}"`, 'success');
+                } else {
+                    const error = await response.json();
+                    console.error(`Failed to auto-connect to "${config.name}":`, error.detail);
+                }
+            } catch (error) {
+                console.error(`Error auto-connecting to "${config.name}":`, error);
+            }
+        }
+        
+        // Refresh configs to update UI after all auto-connects
+        try {
+            const response = await fetch('/api/mcp/configs');
+            const data = await response.json();
+            this.mcpConfigs = data.configs || [];
+            this.renderMCPServersGrid();
+            this.updateMCPChatPanel();
+            this.updateMCPBadge();
+        } catch (error) {
+            console.error('Failed to refresh MCP configs after auto-connect:', error);
         }
     },
     
@@ -320,12 +377,30 @@ const MCPMethods = {
             
             let html = '';
             
-            // Tools as badges
+            // Tools as selectable badges (all enabled by default)
             if (tools.length > 0) {
+                html += '<div class="inline-tools-header">';
+                html += `<span class="tools-count">${tools.length} tools</span>`;
+                html += `<span class="tools-actions">`;
+                html += `<button class="btn-link" onclick="window.vllmUI.setAllMCPTools('${this.escapeHtml(name)}', true)">Enable All</button>`;
+                html += `<button class="btn-link" onclick="window.vllmUI.setAllMCPTools('${this.escapeHtml(name)}', false)">Disable All</button>`;
+                html += `</span>`;
+                html += '</div>';
                 html += '<div class="inline-tools-section">';
-                html += tools.map(tool => `
-                    <span class="tool-badge" title="${this.escapeHtml(tool.description || '')}">${this.escapeHtml(tool.name)}</span>
-                `).join('');
+                html += tools.map(tool => {
+                    const toolKey = `${name}:${tool.name}`;
+                    // Ensure mcpDisabledTools exists
+                    if (!this.mcpDisabledTools) this.mcpDisabledTools = new Set();
+                    const isDisabled = this.mcpDisabledTools.has(toolKey);
+                    return `
+                        <span class="tool-badge ${isDisabled ? 'disabled' : 'enabled'}" 
+                              title="${this.escapeHtml(tool.description || 'No description')}"
+                              data-server="${this.escapeHtml(name)}"
+                              data-tool="${this.escapeHtml(tool.name)}"
+                              onclick="window.vllmUI.toggleMCPTool('${this.escapeHtml(name)}', '${this.escapeHtml(tool.name)}')"
+                        >${this.escapeHtml(tool.name)}</span>
+                    `;
+                }).join('');
                 html += '</div>';
             }
             
@@ -357,9 +432,95 @@ const MCPMethods = {
             
             panel.innerHTML = html;
             
+            // Store tool count for this server for later reference
+            if (!this._mcpServerToolCounts) this._mcpServerToolCounts = {};
+            this._mcpServerToolCounts[name] = tools.length;
+            
         } catch (error) {
             panel.innerHTML = `<div class="details-error">Error loading details: ${this.escapeHtml(error.message)}</div>`;
         }
+    },
+    
+    toggleMCPTool(serverName, toolName) {
+        const toolKey = `${serverName}:${toolName}`;
+        const badge = document.querySelector(`.tool-badge[data-server="${serverName}"][data-tool="${toolName}"]`);
+        
+        // Toggle: if disabled, enable it (remove from disabled set); if enabled, disable it (add to disabled set)
+        if (this.mcpDisabledTools.has(toolKey)) {
+            // Currently disabled, enable it
+            this.mcpDisabledTools.delete(toolKey);
+            if (badge) {
+                badge.classList.remove('disabled');
+                badge.classList.add('enabled');
+            }
+        } else {
+            // Currently enabled, disable it
+            this.mcpDisabledTools.add(toolKey);
+            if (badge) {
+                badge.classList.remove('enabled');
+                badge.classList.add('disabled');
+            }
+        }
+        
+        // Update the tools count in header
+        this.updateMCPToolCount(serverName);
+    },
+    
+    updateMCPToolCount(serverName) {
+        // Get total tools for this server
+        const totalTools = this._mcpServerToolCounts?.[serverName] || 0;
+        
+        // Count disabled tools for this server
+        let disabledCount = 0;
+        this.mcpDisabledTools.forEach(key => {
+            if (key.startsWith(`${serverName}:`)) disabledCount++;
+        });
+        
+        const enabledCount = totalTools - disabledCount;
+        
+        // Update the capability badge in the card header
+        const card = document.querySelector(`.mcp-server-card[data-server="${serverName}"]`);
+        if (card) {
+            const toolsBadge = card.querySelector('.capability-badge[title="Tools"]');
+            if (toolsBadge) {
+                toolsBadge.innerHTML = `<span class="icon-mcp-tools"></span> ${enabledCount}/${totalTools}`;
+            }
+        }
+    },
+    
+    setAllMCPTools(serverName, enabled) {
+        // Enable or disable all tools for a server
+        const panel = document.getElementById(`mcp-details-${serverName}`);
+        if (!panel) return;
+        
+        const badges = panel.querySelectorAll('.tool-badge');
+        badges.forEach(badge => {
+            const toolName = badge.dataset.tool;
+            const toolKey = `${serverName}:${toolName}`;
+            
+            if (enabled) {
+                // Enable: remove from disabled set
+                this.mcpDisabledTools.delete(toolKey);
+                badge.classList.remove('disabled');
+                badge.classList.add('enabled');
+            } else {
+                // Disable: add to disabled set
+                this.mcpDisabledTools.add(toolKey);
+                badge.classList.remove('enabled');
+                badge.classList.add('disabled');
+            }
+        });
+        
+        this.updateMCPToolCount(serverName);
+    },
+    
+    getEnabledMCPTools(serverName) {
+        // Return tools that are enabled (not in disabled set) for a server
+        // If serverName is provided, filter by that server
+        return {
+            disabledTools: Array.from(this.mcpDisabledTools),
+            isToolEnabled: (server, tool) => !this.mcpDisabledTools.has(`${server}:${tool}`)
+        };
     },
     
     renderMCPPresetsGrid() {

@@ -42,6 +42,7 @@ class VLLMWebUI {
         this.mcpEnabled = false;        // Whether MCP is enabled in chat
         this.mcpTools = [];             // Tools from selected servers
         this.mcpPresets = [];           // Built-in presets
+        this.mcpDisabledTools = new Set(); // Disabled tools (server:toolName format) - all enabled by default
         
         this.init();
     }

@@ -159,6 +159,32 @@ class MCPConfigStore:
 # Built-in presets for common MCP servers
 MCP_PRESETS = [
     {
+        "name": "vllm",
+        "display_name": "vLLM",
+        "description": "Chat, benchmarks, model info. Note: If Playground manages vLLM, disable start/stop/restart tools to avoid port conflicts.",
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["vllm-mcp-server"],
+        "env": {
+            "VLLM_BASE_URL": "${VLLM_URL}",
+            "VLLM_HF_TOKEN": "${HF_TOKEN}"
+        },
+        "placeholder_vars": {
+            "VLLM_URL": {
+                "label": "vLLM Server URL",
+                "placeholder": "http://localhost:8000",
+                "required": False
+            },
+            "HF_TOKEN": {
+                "label": "HuggingFace Token (optional)",
+                "placeholder": "hf_xxxxxxxxxxxx",
+                "required": False,
+                "secret": True
+            }
+        },
+        "docs_url": "https://github.com/micytao/vllm-mcp-server"
+    },
+    {
         "name": "filesystem",
         "display_name": "Filesystem",
         "description": "Read and write files in a specified directory",

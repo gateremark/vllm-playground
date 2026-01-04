@@ -748,6 +748,41 @@
     color: var(--danger-color);
 }
 
+/* Tools Header */
+.mcp-server-card .inline-tools-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.mcp-server-card .tools-count {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.mcp-server-card .tools-actions {
+    display: flex;
+    gap: 12px;
+}
+
+.mcp-server-card .tools-actions .btn-link {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 0.75rem;
+    color: var(--primary-color);
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.mcp-server-card .tools-actions .btn-link:hover {
+    text-decoration: underline;
+}
+
 /* Tool Badges */
 .mcp-server-card .inline-tools-section {
     display: flex;
@@ -765,14 +800,34 @@
     font-size: 0.75rem;
     font-family: 'SF Mono', Monaco, 'Consolas', monospace;
     color: var(--text-primary);
-    cursor: default;
+    cursor: pointer;
     transition: all 0.15s ease;
+    user-select: none;
 }
 
-.mcp-server-card .tool-badge:hover {
+/* Enabled tool */
+.mcp-server-card .tool-badge.enabled {
     background: var(--primary-color);
     border-color: var(--primary-color);
     color: #fff;
+}
+
+.mcp-server-card .tool-badge.enabled:hover {
+    background: var(--primary-hover);
+    border-color: var(--primary-hover);
+}
+
+/* Disabled tool */
+.mcp-server-card .tool-badge.disabled {
+    background: var(--bg-tertiary);
+    border-color: var(--border-color);
+    color: var(--text-secondary);
+    opacity: 0.6;
+}
+
+.mcp-server-card .tool-badge.disabled:hover {
+    opacity: 1;
+    border-color: var(--primary-color);
 }
 
 /* Resource Cards */
@@ -929,31 +984,95 @@
 }
 
 .mcp-server-form .form-body {
-    padding: 16px;
+    padding: 12px 16px;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 10px;
 }
 
 .mcp-server-form .form-row {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+}
+
+.mcp-server-form .form-group {
+    margin-bottom: 0;
+}
+
+.mcp-server-form .form-group label {
+    font-size: 0.8rem;
+    margin-bottom: 4px;
+}
+
+.mcp-server-form .form-control {
+    padding: 6px 10px;
+    font-size: 0.85rem;
+}
+
+.mcp-server-form .form-help {
+    font-size: 0.7rem;
+    margin-top: 2px;
 }
 
 .mcp-server-form .options-row {
     display: flex;
-    gap: 20px;
+    gap: 16px;
     flex-wrap: wrap;
+}
+
+.mcp-server-form .checkbox-label {
+    font-size: 0.8rem;
+    gap: 6px;
+}
+
+.mcp-server-form .checkbox-label input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+}
+
+/* Compact env vars section */
+.mcp-server-form .env-vars-container {
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.mcp-server-form .env-var-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.mcp-server-form .env-var-row .form-control {
+    padding: 4px 8px;
+    font-size: 0.8rem;
+}
+
+.mcp-server-form .env-var-row .btn-sm {
+    padding: 4px 8px;
+    min-width: auto;
+    font-size: 0.75rem;
+}
+
+/* Compact buttons */
+.mcp-server-form .btn-secondary.btn-sm {
+    padding: 4px 10px;
+    font-size: 0.75rem;
+    min-width: auto;
 }
 
 .mcp-server-form .form-footer {
     display: flex;
     justify-content: flex-end;
-    gap: 10px;
-    padding: 14px 16px;
+    gap: 8px;
+    padding: 10px 16px;
     background: var(--bg-tertiary);
     border-top: 1px solid var(--border-color);
+}
+
+.mcp-server-form .form-footer .btn {
+    padding: 6px 14px;
+    font-size: 0.8rem;
 }
 
 /* MCP Presets Grid */
