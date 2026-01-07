@@ -1058,9 +1058,10 @@ number ::= [0-9]+`
             }
         });
         
-        // Clear validation when user starts typing
+        // Clear validation when user starts typing and update command preview
         this.elements.localModelPath.addEventListener('input', () => {
             this.clearLocalModelValidation();
+            this.updateCommandPreview();
         });
         
         // Chat
@@ -3220,7 +3221,18 @@ ${fullText.substring(0, 200)}${fullText.length > 200 ? '...' : ''}`;
     }
 
     updateCommandPreview() {
-        const model = this.elements.customModel.value.trim() || this.elements.modelSelect.value;
+        // Check if using local model or HuggingFace model
+        const isLocalModel = this.elements.modelSourceLocal.checked;
+        const localModelPath = this.elements.localModelPath.value.trim();
+        
+        // Use local model path if in local mode, otherwise use HF model
+        let model;
+        if (isLocalModel && localModelPath) {
+            model = localModelPath;
+        } else {
+            model = this.elements.customModel.value.trim() || this.elements.modelSelect.value;
+        }
+        
         const host = this.elements.host.value;
         const port = this.elements.port.value;
         const dtype = this.elements.dtype.value;
