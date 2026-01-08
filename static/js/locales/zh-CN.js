@@ -8,6 +8,7 @@ const zhCN = {
     nav: {
         vllmServer: 'vLLM 服务器',
         guidellm: 'GuideLLM 基准测试',
+        mcpServers: 'MCP 服务器',
         offline: '离线',
         online: '在线',
         collapseSidebar: '收起侧边栏',
@@ -161,7 +162,7 @@ const zhCN = {
     chat: {
         title: '💬 聊天界面',
         clear: '清空',
-        welcomeMessage: '启动 vLLM 服务器并开始与您的模型聊天。',
+        welcomeMessage: '欢迎！尝试工具栏中的不同选项来自定义您的聊天体验。',
         inputPlaceholder: '在此输入您的消息...',
         send: '发送',
         thinking: '思考中...',
@@ -251,13 +252,24 @@ const zhCN = {
             }
         },
         mcp: {
-            title: '🔌 MCP 服务器',
+            title: '🔌 MCP',
             docs: '📖 文档',
-            enable: '启用 MCP',
+            enable: '启用',
             serverRequired: '需要在服务器配置中启用工具调用',
             mcpServers: 'MCP 服务器',
             noServers: '未配置 MCP 服务器',
             addServer: '+ 添加服务器',
+            notInstalled: 'MCP 未安装',
+            installCmd: 'pip install vllm-playground[mcp]',
+            configureLink: '配置 MCP →',
+            enablePrompt: '启用 MCP 以使用已配置服务器的工具',
+            configureServersLink: '配置 MCP 服务器 →',
+            infoTip: '启用工具调用启动 vLLM。设置最大模型长度为 8192+。使用具有工具调用能力的较大模型（例如 Qwen 2.5 7B+、Llama 3.1 8B+）以获得更好的效果。',
+            addServerLink: '添加 MCP 服务器 →',
+            selectServers: '选择要使用的服务器：',
+            selectAll: '全选',
+            selectNone: '取消全选',
+            toolsSummary: '{{tools}} 个工具来自 {{servers}} 个服务器',
             serverCard: {
                 command: '命令：',
                 args: '参数：',
@@ -551,6 +563,90 @@ const zhCN = {
         switch: '切换语言',
         english: 'English',
         chinese: '简体中文'
+    },
+    
+    // MCP Configuration View (Model Context Protocol)
+    mcp: {
+        nav: 'MCP 服务器',
+        title: 'MCP',
+        enable: '启用',
+        configTitle: 'MCP 服务器配置',
+        configSubtitle: '配置模型上下文协议服务器以扩展 LLM 能力，使用外部工具',
+        checkingAvailability: '正在检查 MCP 可用性...',
+        notInstalled: 'MCP 未安装',
+        installPrompt: '安装 MCP 包以启用此功能：',
+        configuredServers: '已配置的服务器',
+        addServer: '添加服务器',
+        noServersConfigured: '未配置 MCP 服务器',
+        noServersHint: '添加服务器开始使用，或从下面的预设中选择',
+        addNewServer: '添加新服务器',
+        editServer: '编辑服务器',
+        serverName: '服务器名称',
+        serverNameHelp: '此服务器的唯一标识符',
+        transportType: '传输类型',
+        transportStdio: 'Stdio（本地命令）',
+        transportSse: 'SSE（HTTP 端点）',
+        command: '命令',
+        commandHelp: '要运行的可执行文件',
+        arguments: '参数',
+        argumentsHelp: '以空格分隔的命令参数',
+        serverUrl: '服务器 URL',
+        serverUrlHelp: 'SSE 端点 URL',
+        envVars: '环境变量',
+        addEnvVar: '+ 添加变量',
+        description: '描述',
+        descriptionPlaceholder: '可选描述',
+        enabled: '已启用',
+        autoConnect: '启动时自动连接',
+        saveServer: '保存服务器',
+        securityNotice: '安全提示',
+        securityWarnings: {
+            pythonVersion: 'MCP 需要 Python 3.10 或更高版本',
+            experimental: 'MCP 集成是实验性/演示功能',
+            trustedOnly: '仅使用受信任的 MCP 服务器',
+            reviewCalls: '执行前检查每个工具调用'
+        },
+        stdioDepTitle: 'STDIO 传输依赖',
+        stdioDeps: {
+            npx: 'npx (Node.js) - 文件系统服务器需要',
+            uvx: 'uvx (uv) - Git、Fetch、Time 服务器需要',
+            sse: 'SSE 传输连接到远程 URL，无需本地依赖'
+        },
+        quickStart: '快速开始预设',
+        serverDetails: '服务器详情',
+        // Chat panel specific
+        chatNotInstalled: 'MCP 未安装',
+        chatInstallCmd: 'pip install vllm-playground[mcp]',
+        chatConfigureLink: '配置 MCP →',
+        chatEnablePrompt: '启用 MCP 以使用已配置服务器的工具',
+        chatConfigureServersLink: '配置 MCP 服务器 →',
+        chatInfoTip: '启用工具调用启动 vLLM。设置最大模型长度为 8192+。使用具有工具调用能力的较大模型（例如 Qwen 2.5 7B+、Llama 3.1 8B+）以获得更好的效果。',
+        chatNoServers: '未配置 MCP 服务器',
+        chatAddServerLink: '添加 MCP 服务器 →',
+        chatSelectServers: '选择要使用的服务器：',
+        chatSelectAll: '全选',
+        chatSelectNone: '取消',
+        chatToolsSummary: '{{tools}} 个工具来自 {{servers}} 个服务器',
+        // Status
+        connecting: '连接中...',
+        connected: '已连接',
+        disconnected: '已断开',
+        error: '错误'
+    },
+    
+    // Container Runtime
+    containerRuntime: {
+        checking: '检测中...',
+        detected: '容器运行时',
+        notDetected: '未检测到容器运行时'
+    },
+    
+    // Confirm Modal
+    confirmModal: {
+        title: '确认操作',
+        message: '确定吗？',
+        cancel: '取消',
+        confirm: '确认'
     }
 };
 
