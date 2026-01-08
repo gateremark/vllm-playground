@@ -245,6 +245,9 @@ class VLLMWebUI {
         // Initialize view switching
         this.initViewSwitching();
         
+        // Initialize i18n (language system) - must be before theme to ensure translations are available
+        this.initI18n();
+        
         // Initialize theme
         this.initTheme();
         
@@ -449,20 +452,21 @@ class VLLMWebUI {
     applyTheme(theme) {
         const icon = this.elements.themeToggle?.querySelector('.theme-icon');
         const label = this.elements.themeToggle?.querySelector('.theme-label');
+        const t = (key) => window.i18n ? window.i18n.t(key) : key;
         
         if (theme === 'light') {
             document.documentElement.setAttribute('data-theme', 'light');
             if (icon) icon.textContent = '◑';
-            if (label) label.textContent = 'Light';
+            if (label) label.textContent = t('theme.light');
             if (this.elements.themeToggle) {
-                this.elements.themeToggle.title = 'Switch to dark mode';
+                this.elements.themeToggle.title = t('theme.toggle');
             }
         } else {
             document.documentElement.removeAttribute('data-theme');
             if (icon) icon.textContent = '◐';
-            if (label) label.textContent = 'Dark';
+            if (label) label.textContent = t('theme.dark');
             if (this.elements.themeToggle) {
-                this.elements.themeToggle.title = 'Switch to light mode';
+                this.elements.themeToggle.title = t('theme.toggle');
             }
         }
         this.currentTheme = theme;
@@ -473,6 +477,72 @@ class VLLMWebUI {
         this.applyTheme(newTheme);
         localStorage.setItem('vllm-theme', newTheme);
         this.showNotification(`Switched to ${newTheme} mode`, 'info');
+    }
+    
+    // ============ i18n (Internationalization) ============
+    initI18n() {
+        // Initialize i18n system
+        if (window.i18n) {
+            window.i18n.init();
+            
+            // Create language selector in header
+            const container = document.getElementById('language-selector-container');
+            if (container) {
+                window.i18n.createLanguageSelector(container);
+            }
+            
+            // Listen for locale change events
+            window.addEventListener('localeChanged', (e) => {
+                const locale = e.detail.locale;
+                console.log(`[App] Language changed to: ${locale}`);
+                
+                // Update dynamic content
+                this.updateDynamicTranslations();
+                
+                // Show notification
+                const localeName = window.i18n.getAvailableLocales()[locale]?.nativeName || locale;
+                this.showNotification(`Language: ${localeName}`, 'info');
+            });
+        } else {
+            console.warn('[App] i18n system not available');
+        }
+    }
+    
+    /**
+     * Update dynamically generated content with translations
+     * This is called when language changes
+     */
+    updateDynamicTranslations() {
+        // Helper function to translate
+        const t = (key, params) => window.i18n ? window.i18n.t(key, params) : key;
+        
+        // Update status text if needed
+        if (this.elements.statusText && !this.serverRunning) {
+            this.elements.statusText.textContent = t('status.disconnected');
+        }
+        
+        // Update nav status text
+        const navStatusText = document.getElementById('nav-status-text');
+        if (navStatusText && !this.serverRunning) {
+            navStatusText.textContent = t('status.offline');
+        }
+        
+        // Update theme label
+        this.updateThemeLabel();
+        
+        // Note: Most content is updated automatically via data-i18n attributes
+        // This function is only for content that's dynamically generated or needs special handling
+    }
+    
+    /**
+     * Update theme toggle button label based on current language
+     */
+    updateThemeLabel() {
+        const label = this.elements.themeToggle?.querySelector('.theme-label');
+        if (label && window.i18n) {
+            const isDark = this.currentTheme === 'dark';
+            label.textContent = window.i18n.t(isDark ? 'theme.dark' : 'theme.light');
+        }
     }
     
     // NOTE: updateBenchmarkServerStatus is injected by GuideLLM module
@@ -988,9 +1058,10 @@ number ::= [0-9]+`
             }
         });
         
-        // Clear validation when user starts typing
+        // Clear validation when user starts typing and update command preview
         this.elements.localModelPath.addEventListener('input', () => {
             this.clearLocalModelValidation();
+            this.updateCommandPreview();
         });
         
         // Chat
@@ -1245,28 +1316,18 @@ number ::= [0-9]+`
             // Log hardware capabilities
             console.log('Hardware capabilities:', capabilities);
             
-            // Disable GPU option if GPU is not available
+            // Handle GPU detection result (but don't force disable - allow manual selection)
             if (!capabilities.gpu_available) {
-                // Disable GPU radio button
-                this.elements.modeGpu.disabled = true;
-                this.elements.modeGpuLabel.classList.add('disabled');
-                this.elements.modeGpuLabel.title = 'GPU not available on this system. Requires CUDA-capable GPU and drivers.';
-                this.elements.modeGpuLabel.style.opacity = '0.5';
-                this.elements.modeGpuLabel.style.cursor = 'not-allowed';
+                // GPU not detected - show warning but still allow selection
+                // User may know their server has GPU even if detection fails
+                this.elements.modeGpuLabel.title = 'GPU not auto-detected. You can still select GPU mode if your server has a GPU.';
                 
-                // Force CPU mode
-                this.elements.modeCpu.checked = true;
-                this.toggleComputeMode();
-                
-                // Update help text
-                this.elements.modeHelpText.innerHTML = '⚠️ GPU not available - Running in CPU-only mode';
+                // Update help text with warning
+                this.elements.modeHelpText.innerHTML = '⚠️ GPU not auto-detected. Select GPU if your server has one.';
                 this.elements.modeHelpText.style.color = '#f59e0b';
                 
-                // Hide GPU status display
-                document.getElementById('gpu-status-display').style.display = 'none';
-                
-                console.warn('GPU is not available on this system');
-                this.addLog('[SYSTEM] GPU not detected - GPU mode disabled', 'warning');
+                console.warn('GPU not auto-detected (detection method: ' + capabilities.detection_method + ')');
+                this.addLog('[SYSTEM] GPU not auto-detected - Manual selection available', 'warning');
             } else {
                 // GPU is available
                 console.log('GPU is available on this system');
@@ -1397,16 +1458,31 @@ number ::= [0-9]+`
 
         let html = '';
         data.gpus.forEach(gpu => {
-            const memoryUsedPercent = (gpu.memory_used / gpu.memory_total) * 100;
-            const memoryFreeGB = (gpu.memory_total - gpu.memory_used) / 1024;
-            const memoryTotalGB = gpu.memory_total / 1024;
-            const memoryUsedGB = gpu.memory_used / 1024;
+            // Handle memory values (support both MB and bytes, default to 0 for N/A)
+            const memoryTotal = gpu.memory_total || 0;
+            const memoryUsed = gpu.memory_used || 0;
+            const memoryFree = gpu.memory_free || (memoryTotal - memoryUsed);
+            
+            const memoryUsedPercent = memoryTotal > 0 ? (memoryUsed / memoryTotal) * 100 : 0;
+            const memoryFreeGB = memoryFree / 1024;
+            const memoryTotalGB = memoryTotal / 1024;
+            const memoryUsedGB = memoryUsed / 1024;
+            
+            // Support multiple property names for utilization (nvidia-smi may return different names)
+            const utilization = gpu.utilization ?? gpu.utilization_gpu ?? gpu['utilization.gpu'] ?? 0;
+            
+            // Support multiple property names for temperature
+            const temperature = gpu.temperature ?? gpu.temperature_gpu ?? gpu['temperature.gpu'] ?? 0;
+            
+            // Display N/A for values that couldn't be read (common on Jetson devices)
+            const utilizationDisplay = utilization > 0 || gpu.utilization !== undefined ? `${utilization}%` : 'N/A';
+            const temperatureDisplay = temperature > 0 || gpu.temperature !== undefined ? `${temperature}°C` : 'N/A';
 
             html += `
                 <div class="gpu-device">
                     <div class="gpu-device-header">
-                        <span class="gpu-name">${gpu.name}</span>
-                        <span class="gpu-index">GPU ${gpu.index}</span>
+                        <span class="gpu-name">${gpu.name || 'Unknown GPU'}</span>
+                        <span class="gpu-index">GPU ${gpu.index ?? 0}</span>
                     </div>
                     <div class="gpu-memory">
                         <div class="memory-info">
@@ -1414,19 +1490,19 @@ number ::= [0-9]+`
                             <span>${memoryUsedPercent.toFixed(1)}% used</span>
                         </div>
                         <div class="memory-bar">
-                            <div class="memory-used" style="width: ${memoryUsedPercent}%"></div>
+                            <div class="memory-used" style="width: ${Math.min(memoryUsedPercent, 100)}%"></div>
                         </div>
                     </div>
                     <div class="gpu-utilization">
                         <span class="utilization-label">GPU Utilization:</span>
-                        <span class="utilization-value">${gpu.utilization_gpu}%</span>
+                        <span class="utilization-value">${utilizationDisplay}</span>
                         <div class="utilization-bar">
-                            <div class="utilization-fill" style="width: ${gpu.utilization_gpu}%"></div>
+                            <div class="utilization-fill" style="width: ${Math.min(utilization, 100)}%"></div>
                         </div>
                     </div>
                     <div class="gpu-temperature">
                         <span class="temp-icon">🌡️</span>
-                        <span class="temp-value">${gpu.temperature}°C</span>
+                        <span class="temp-value">${temperatureDisplay}</span>
                     </div>
                 </div>
             `;
@@ -3160,7 +3236,18 @@ ${fullText.substring(0, 200)}${fullText.length > 200 ? '...' : ''}`;
     }
 
     updateCommandPreview() {
-        const model = this.elements.customModel.value.trim() || this.elements.modelSelect.value;
+        // Check if using local model or HuggingFace model
+        const isLocalModel = this.elements.modelSourceLocal.checked;
+        const localModelPath = this.elements.localModelPath.value.trim();
+        
+        // Use local model path if in local mode, otherwise use HF model
+        let model;
+        if (isLocalModel && localModelPath) {
+            model = localModelPath;
+        } else {
+            model = this.elements.customModel.value.trim() || this.elements.modelSelect.value;
+        }
+        
         const host = this.elements.host.value;
         const port = this.elements.port.value;
         const dtype = this.elements.dtype.value;
@@ -3199,8 +3286,11 @@ ${fullText.substring(0, 200)}${fullText.length > 200 ? '...' : ''}`;
             // GPU mode: use openai.api_server
             const gpuDevice = this.elements.gpuDevice.value.trim();
             
+            // Initialize cmd for GPU mode
+            cmd = '';
+            
             if (gpuDevice) {
-                cmd = `# GPU Device Selection:\n`;
+                cmd += `# GPU Device Selection:\n`;
                 cmd += `export CUDA_VISIBLE_DEVICES=${gpuDevice}\n\n`;
             }
             
@@ -3208,6 +3298,7 @@ ${fullText.substring(0, 200)}${fullText.length > 200 ? '...' : ''}`;
                 cmd += `# Set HF token for gated models:\n`;
                 cmd += `export HF_TOKEN=[YOUR_TOKEN]\n\n`;
             }
+            
             cmd += `python -m vllm.entrypoints.openai.api_server`;
             cmd += ` \\\n  --model ${model}`;
             cmd += ` \\\n  --host ${host}`;
@@ -3269,8 +3360,8 @@ ${fullText.substring(0, 200)}${fullText.length > 200 ? '...' : ''}`;
             }
         }
         
-        // Add chat template flag (vLLM requires this for /v1/chat/completions)
-        cmd += ` \\\n  --chat-template <auto-detected-or-custom>`;
+        // Note: vLLM automatically loads chat templates from model's tokenizer_config.json
+        // No need to specify --chat-template manually
         
         // Update the display (use value for textarea)
         this.elements.commandText.value = cmd;

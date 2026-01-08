@@ -1397,16 +1397,31 @@ number ::= [0-9]+`
 
         let html = '';
         data.gpus.forEach(gpu => {
-            const memoryUsedPercent = (gpu.memory_used / gpu.memory_total) * 100;
-            const memoryFreeGB = (gpu.memory_total - gpu.memory_used) / 1024;
-            const memoryTotalGB = gpu.memory_total / 1024;
-            const memoryUsedGB = gpu.memory_used / 1024;
+            // Handle memory values (support both MB and bytes, default to 0 for N/A)
+            const memoryTotal = gpu.memory_total || 0;
+            const memoryUsed = gpu.memory_used || 0;
+            const memoryFree = gpu.memory_free || (memoryTotal - memoryUsed);
+            
+            const memoryUsedPercent = memoryTotal > 0 ? (memoryUsed / memoryTotal) * 100 : 0;
+            const memoryFreeGB = memoryFree / 1024;
+            const memoryTotalGB = memoryTotal / 1024;
+            const memoryUsedGB = memoryUsed / 1024;
+            
+            // Support multiple property names for utilization (nvidia-smi may return different names)
+            const utilization = gpu.utilization ?? gpu.utilization_gpu ?? gpu['utilization.gpu'] ?? 0;
+            
+            // Support multiple property names for temperature
+            const temperature = gpu.temperature ?? gpu.temperature_gpu ?? gpu['temperature.gpu'] ?? 0;
+            
+            // Display N/A for values that couldn't be read (common on Jetson devices)
+            const utilizationDisplay = utilization > 0 || gpu.utilization !== undefined ? `${utilization}%` : 'N/A';
+            const temperatureDisplay = temperature > 0 || gpu.temperature !== undefined ? `${temperature}°C` : 'N/A';
 
             html += `
                 <div class="gpu-device">
                     <div class="gpu-device-header">
-                        <span class="gpu-name">${gpu.name}</span>
-                        <span class="gpu-index">GPU ${gpu.index}</span>
+                        <span class="gpu-name">${gpu.name || 'Unknown GPU'}</span>
+                        <span class="gpu-index">GPU ${gpu.index ?? 0}</span>
                     </div>
                     <div class="gpu-memory">
                         <div class="memory-info">
@@ -1414,19 +1429,19 @@ number ::= [0-9]+`
                             <span>${memoryUsedPercent.toFixed(1)}% used</span>
                         </div>
                         <div class="memory-bar">
-                            <div class="memory-used" style="width: ${memoryUsedPercent}%"></div>
+                            <div class="memory-used" style="width: ${Math.min(memoryUsedPercent, 100)}%"></div>
                         </div>
                     </div>
                     <div class="gpu-utilization">
                         <span class="utilization-label">GPU Utilization:</span>
-                        <span class="utilization-value">${gpu.utilization_gpu}%</span>
+                        <span class="utilization-value">${utilizationDisplay}</span>
                         <div class="utilization-bar">
-                            <div class="utilization-fill" style="width: ${gpu.utilization_gpu}%"></div>
+                            <div class="utilization-fill" style="width: ${Math.min(utilization, 100)}%"></div>
                         </div>
                     </div>
                     <div class="gpu-temperature">
                         <span class="temp-icon">🌡️</span>
-                        <span class="temp-value">${gpu.temperature}°C</span>
+                        <span class="temp-value">${temperatureDisplay}</span>
                     </div>
                 </div>
             `;

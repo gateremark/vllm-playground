@@ -21,11 +21,11 @@
             <div class="nav-items">
                 <button class="nav-item active" data-view="vllm-server" title="vLLM Server">
                     <img src="/assets/vllm-logo.svg" alt="" class="nav-item-logo" onerror="this.style.display='none'">
-                    <span class="nav-label">vLLM Server</span>
+                    <span class="nav-label" data-i18n="nav.vllmServer">vLLM Server</span>
                 </button>
                 <button class="nav-item" data-view="guidellm" title="GuideLLM Benchmark">
                     <img src="/assets/guidellm-logo.svg" alt="" class="nav-item-logo" onerror="this.style.display='none'">
-                    <span class="nav-label">GuideLLM</span>
+                    <span class="nav-label" data-i18n="nav.guidellm">GuideLLM</span>
                 </button>
                 <button class="nav-item" data-view="mcp-config" title="MCP Servers" id="nav-mcp">
                     <span class="nav-item-icon icon-mcp-nav"></span>
@@ -37,7 +37,7 @@
             <div class="nav-footer">
                 <div class="nav-status">
                     <span id="nav-status-dot" class="status-dot"></span>
-                    <span id="nav-status-text" class="nav-status-text">Offline</span>
+                    <span id="nav-status-text" class="nav-status-text" data-i18n="status.offline">Offline</span>
                     <span id="nav-version" class="nav-version"></span>
                 </div>
                 <button class="nav-collapse-btn" id="nav-collapse-btn" title="Collapse sidebar">
@@ -71,6 +71,8 @@
                             <span class="theme-icon">◐</span>
                             <span class="theme-label">Dark</span>
                         </button>
+                        <!-- Language selector will be inserted here by i18n.js -->
+                        <div id="language-selector-container"></div>
                     </div>
                 </div>
             </header>
@@ -84,27 +86,27 @@
                     <!-- Left Sidebar - Configuration -->
                     <aside class="sidebar resizable" id="config-panel">
                         <div class="panel">
-                            <h2>⚙️ Server Configuration</h2>
+                            <h2 data-i18n="serverConfig.title">⚙️ Server Configuration</h2>
                             
                             <!-- Model Source Toggle -->
                             <div class="form-group mode-toggle-group">
-                                <label>Model Source</label>
+                                <label data-i18n="serverConfig.modelSource.label">Model Source</label>
                                 <div class="mode-toggle-buttons">
                                     <label class="mode-button active" id="model-source-hub-label">
                                         <input type="radio" name="model-source" id="model-source-hub" value="hub" checked>
-                                        <span class="mode-button-content"><span class="mode-icon">🤗</span><span class="mode-label">HuggingFace</span></span>
+                                        <span class="mode-button-content"><span class="mode-icon">🤗</span><span class="mode-label" data-i18n="serverConfig.modelSource.huggingface">HuggingFace</span></span>
                                     </label>
                                     <label class="mode-button" id="model-source-local-label">
                                         <input type="radio" name="model-source" id="model-source-local" value="local">
-                                        <span class="mode-button-content"><span class="mode-icon">📂</span><span class="mode-label">Local</span></span>
+                                        <span class="mode-button-content"><span class="mode-icon">📂</span><span class="mode-label" data-i18n="serverConfig.modelSource.local">Local</span></span>
                                     </label>
                                 </div>
-                                <small class="form-help" id="model-source-help-text">Select model from HuggingFace or local directory</small>
+                                <small class="form-help" id="model-source-help-text" data-i18n="serverConfig.modelSource.help">Select model from HuggingFace or local directory</small>
                             </div>
 
                             <!-- HuggingFace Hub Model Selection (default visible) -->
                             <div id="hub-model-section" class="form-group">
-                                <label for="model-select">Model</label>
+                                <label for="model-select" data-i18n="serverConfig.model.label">Model</label>
                                 <select id="model-select" class="form-control">
                                     <!-- CPU-Optimized Models (Recommended for macOS) -->
                                     <optgroup label="🖥️ CPU-Friendly Models">
@@ -178,43 +180,43 @@
 
                             <!-- Run Mode Toggle -->
                             <div class="form-group mode-toggle-group">
-                                <label>Run Mode</label>
+                                <label data-i18n="serverConfig.runMode.label">Run Mode</label>
                                 <div class="mode-toggle-buttons">
                                     <label class="mode-button" id="run-mode-subprocess-label">
                                         <input type="radio" name="run-mode" id="run-mode-subprocess" value="subprocess">
-                                        <span>⚡ Subprocess</span>
+                                        <span data-i18n="serverConfig.runMode.subprocess">⚡ Subprocess</span>
                                     </label>
                                     <label class="mode-button active" id="run-mode-container-label">
                                         <input type="radio" name="run-mode" id="run-mode-container" value="container" checked>
-                                        <span>📦 Container</span>
+                                        <span data-i18n="serverConfig.runMode.container">📦 Container</span>
                                     </label>
                                 </div>
-                                <small class="form-help" id="run-mode-help-text">Container: Isolated (recommended), Subprocess: Direct (requires vLLM installed)</small>
+                                <small class="form-help" id="run-mode-help-text" data-i18n="serverConfig.runMode.help">Container: Isolated (recommended), Subprocess: Direct (requires vLLM installed)</small>
                             </div>
 
                             <!-- CPU/GPU Mode Toggle -->
                             <div class="form-group mode-toggle-group">
-                                <label>Compute Mode</label>
+                                <label data-i18n="serverConfig.computeMode.label">Compute Mode</label>
                                 <div class="mode-toggle-buttons">
                                     <label class="mode-button active" id="mode-cpu-label">
                                         <input type="radio" name="compute-mode" id="mode-cpu" value="cpu" checked>
-                                        <span>🖥️ CPU</span>
+                                        <span data-i18n="serverConfig.computeMode.cpu">🖥️ CPU</span>
                                     </label>
                                     <label class="mode-button" id="mode-gpu-label">
                                         <input type="radio" name="compute-mode" id="mode-gpu" value="gpu">
-                                        <span>🎮 GPU</span>
+                                        <span data-i18n="serverConfig.computeMode.gpu">🎮 GPU</span>
                                     </label>
                                 </div>
-                                <small class="form-help" id="mode-help-text">CPU mode is recommended for macOS</small>
+                                <small class="form-help" id="mode-help-text" data-i18n="serverConfig.computeMode.help">CPU mode is recommended for macOS</small>
                             </div>
 
                             <div class="form-row">
                                 <div class="form-group">
-                                    <label for="host">Host</label>
+                                    <label for="host" data-i18n="serverConfig.host.label">Host</label>
                                     <input type="text" id="host" class="form-control" value="0.0.0.0">
                                 </div>
                                 <div class="form-group">
-                                    <label for="port">Port</label>
+                                    <label for="port" data-i18n="serverConfig.port.label">Port</label>
                                     <input type="number" id="port" class="form-control" value="8000">
                                 </div>
                             </div>
@@ -357,8 +359,8 @@
                             </div>
 
                             <div class="button-group">
-                                <button id="start-btn" class="btn btn-primary">Start Server</button>
-                                <button id="stop-btn" class="btn btn-danger" disabled>Stop Server</button>
+                                <button id="start-btn" class="btn btn-primary" data-i18n="serverConfig.buttons.start">Start Server</button>
+                                <button id="stop-btn" class="btn btn-danger" disabled data-i18n="serverConfig.buttons.stop">Stop Server</button>
                             </div>
                         </div>
                         <div class="resize-handle resize-handle-vertical" data-direction="horizontal"></div>
@@ -368,16 +370,16 @@
                     <main class="chat-section resizable" id="chat-panel">
                         <div class="panel">
                             <div class="panel-header">
-                                <h2>💬 Chat Interface</h2>
+                                <h2 data-i18n="chat.title">💬 Chat Interface</h2>
                                 <div class="chat-header-actions">
-                                    <button id="clear-chat-btn" class="btn btn-secondary btn-sm" style="min-width: 80px; padding: 6px 16px;">Clear</button>
+                                    <button id="clear-chat-btn" class="btn btn-secondary btn-sm" style="min-width: 80px; padding: 6px 16px;" data-i18n="chat.clear">Clear</button>
                                 </div>
                             </div>
                             
                             <div id="chat-container" class="chat-container">
                                 <div class="chat-message system">
                                     <div class="message-content">
-                                        <span class="message-text">Welcome! Try different options in the toolbar to customize your chat experience.</span>
+                                        <span class="message-text" data-i18n="chat.welcomeMessage">Welcome! Try different options in the toolbar to customize your chat experience.</span>
                                     </div>
                                 </div>
                             </div>
@@ -385,8 +387,8 @@
                             <div class="chat-input-area">
                                 <!-- Main Input Group -->
                                 <div class="input-group">
-                                    <textarea id="chat-input" class="chat-input" placeholder="Type your message here..." rows="1"></textarea>
-                                    <button id="send-btn" class="btn btn-primary" disabled>Send</button>
+                                    <textarea id="chat-input" class="chat-input" data-i18n-placeholder="chat.inputPlaceholder" placeholder="Type your message here..." rows="1"></textarea>
+                                    <button id="send-btn" class="btn btn-primary" disabled data-i18n="chat.send">Send</button>
                                 </div>
                                 
                                 <!-- Inline Expandable Panels -->
@@ -1332,6 +1334,12 @@
         </div>
     </div>
 
+    <!-- i18n System -->
+    <script src="/static/js/i18n.js"></script>
+    <script src="/static/js/locales/en.js"></script>
+    <script src="/static/js/locales/zh-CN.js"></script>
+    
+    <!-- Main App -->
     <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

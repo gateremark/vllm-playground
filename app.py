@@ -1202,10 +1202,26 @@ async def get_hardware_capabilities():
     }
 
 
+def safe_int(value, default=0):
+    """Safely convert value to int, handling N/A, [N/A], empty strings, etc."""
+    if value is None:
+        return default
+    # Remove brackets and whitespace
+    cleaned = str(value).strip().replace('[', '').replace(']', '')
+    # Handle N/A, Not Supported, etc.
+    if not cleaned or cleaned.upper() in ('N/A', 'NOT SUPPORTED', 'UNKNOWN', '-'):
+        return default
+    try:
+        return int(cleaned)
+    except (ValueError, TypeError):
+        return default
+
+
 @app.get("/api/gpu-status")
 async def get_gpu_status():
     """
     Get detailed GPU status information including memory usage and utilization
+    Supports both desktop GPUs and NVIDIA Jetson devices
     """
     gpu_info = []
     
@@ -1222,14 +1238,15 @@ async def get_gpu_status():
             for line in lines:
                 parts = [p.strip() for p in line.split(',')]
                 if len(parts) >= 7:
+                    # Use safe_int to handle [N/A] values on Jetson devices
                     gpu_info.append({
-                        "index": int(parts[0]),
+                        "index": safe_int(parts[0], 0),
                         "name": parts[1],
-                        "memory_used": int(parts[2]),
-                        "memory_total": int(parts[3]),
-                        "memory_free": int(parts[4]),
-                        "utilization": int(parts[5]),
-                        "temperature": int(parts[6])
+                        "memory_used": safe_int(parts[2], 0),
+                        "memory_total": safe_int(parts[3], 0),
+                        "memory_free": safe_int(parts[4], 0),
+                        "utilization": safe_int(parts[5], 0),
+                        "temperature": safe_int(parts[6], 0)
                     })
         
         return {
