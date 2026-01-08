@@ -710,11 +710,11 @@ class VLLMWebUI {
             toolsBtn.classList.toggle('modified', hasTools);
         }
         
-        // MCP - check if any servers are configured
+        // MCP - check if MCP is enabled in chat with selected servers
         const mcpBtn = document.getElementById('toolbar-mcp');
         if (mcpBtn) {
-            const hasMcpServers = (this.mcpServers?.length || 0) > 0;
-            mcpBtn.classList.toggle('modified', hasMcpServers);
+            const mcpActive = this.mcpEnabled && (this.mcpSelectedServers?.length || 0) > 0;
+            mcpBtn.classList.toggle('modified', mcpActive);
         }
     }
     
@@ -1181,6 +1181,12 @@ number ::= [0-9]+`
                 console.warn('GuideLLM is not available. Install with: pip install guidellm');
             }
             
+            // Handle vLLM availability (for subprocess mode)
+            this.vllmInstalled = features.vllm_installed || false;
+            this.vllmVersion = features.vllm_version || null;
+            this.containerModeAvailable = features.container_mode || false;
+            this.updateRunModeAvailability();
+            
             // Handle MCP availability
             this.mcpAvailable = features.mcp || false;
             initMCPModule(this);
@@ -1191,6 +1197,9 @@ number ::= [0-9]+`
             
             // Update container runtime status
             this.updateContainerRuntimeStatus(features.container_runtime, features.container_mode);
+            
+            // Update version display
+            this.updateVersionDisplay(features.version);
             
             // Check hardware capabilities
             await this.checkHardwareCapabilities();
@@ -1215,6 +1224,16 @@ number ::= [0-9]+`
             statusEl.classList.add('unavailable');
             textEl.textContent = 'No Runtime';
             statusEl.title = 'No container runtime available (podman/docker not found)';
+        }
+    }
+    
+    updateVersionDisplay(version) {
+        const versionEl = document.getElementById('nav-version');
+        if (!versionEl) return;
+        
+        if (version) {
+            versionEl.textContent = `v${version}`;
+            versionEl.title = `vLLM Playground version ${version}`;
         }
     }
     
@@ -1462,15 +1481,54 @@ number ::= [0-9]+`
         if (isSubprocess) {
             this.elements.runModeSubprocessLabel.classList.add('active');
             this.elements.runModeContainerLabel.classList.remove('active');
-            this.elements.runModeHelpText.textContent = 'Subprocess: Direct execution (simpler, local dev)';
+            
+            // Check if vLLM is installed
+            if (!this.vllmInstalled) {
+                this.elements.runModeHelpText.innerHTML = '<span style="color: var(--error-color);">⚠️ vLLM not installed. Run: pip install vllm</span>';
+            } else {
+                const versionText = this.vllmVersion ? `v${this.vllmVersion}` : 'version unknown';
+                this.elements.runModeHelpText.textContent = `Subprocess: Direct execution using vLLM (${versionText})`;
+            }
         } else {
             this.elements.runModeSubprocessLabel.classList.remove('active');
             this.elements.runModeContainerLabel.classList.add('active');
-            this.elements.runModeHelpText.textContent = 'Container: Isolated environment (recommended for production)';
+            
+            if (!this.containerModeAvailable) {
+                this.elements.runModeHelpText.innerHTML = '<span style="color: var(--error-color);">⚠️ No container runtime (podman/docker) found</span>';
+            } else {
+                this.elements.runModeHelpText.textContent = 'Container: Isolated environment (recommended)';
+            }
         }
         
         // Update command preview
         this.updateCommandPreview();
+    }
+    
+    updateRunModeAvailability() {
+        // Update UI based on what's available
+        const subprocessLabel = this.elements.runModeSubprocessLabel;
+        const containerLabel = this.elements.runModeContainerLabel;
+        
+        // Add visual indication for unavailable modes
+        if (!this.vllmInstalled) {
+            subprocessLabel.classList.add('mode-unavailable');
+            subprocessLabel.title = 'vLLM not installed. Run: pip install vllm';
+        } else {
+            subprocessLabel.classList.remove('mode-unavailable');
+            const versionText = this.vllmVersion ? `v${this.vllmVersion}` : 'version unknown';
+            subprocessLabel.title = `vLLM (${versionText}) installed`;
+        }
+        
+        if (!this.containerModeAvailable) {
+            containerLabel.classList.add('mode-unavailable');
+            containerLabel.title = 'No container runtime (podman/docker) found';
+        } else {
+            containerLabel.classList.remove('mode-unavailable');
+            containerLabel.title = 'Container mode available';
+        }
+        
+        // Trigger toggleRunMode to update help text
+        this.toggleRunMode();
     }
 
     toggleModelSource() {
@@ -1801,6 +1859,19 @@ number ::= [0-9]+`
     async startServer() {
         const config = this.getConfig();
         
+        // Check run mode requirements
+        if (config.run_mode === 'subprocess' && !this.vllmInstalled) {
+            this.showNotification('⚠️ Cannot use Subprocess mode: vLLM is not installed. Please install vLLM (pip install vllm) or switch to Container mode.', 'error');
+            this.addLog('❌ Subprocess mode requires vLLM to be installed. Run: pip install vllm', 'error');
+            return;
+        }
+        
+        if (config.run_mode === 'container' && !this.containerModeAvailable) {
+            this.showNotification('⚠️ Cannot use Container mode: No container runtime found. Please install podman or docker.', 'error');
+            this.addLog('❌ Container mode requires podman or docker to be installed.', 'error');
+            return;
+        }
+        
         // Validate local model path if using local model
         if (config.local_model_path) {
             this.addLog('🔍 Validating local model path...', 'info');
@@ -1985,8 +2056,32 @@ number ::= [0-9]+`
             // Stop tokens are only for reference/documentation in the UI
             // Users can still set custom_stop_tokens in the server config if needed
             
-            // Get tools configuration
-            const toolsConfig = this.getToolsForRequest();
+            // Get tools configuration - MCP and Custom Tools are SEPARATE
+            // MCP takes priority when enabled
+            let toolsConfig = { tools: null, tool_choice: null, parallel_tool_calls: null };
+            let usingMCPTools = false;
+            
+            if (this.mcpEnabled && typeof this.getMCPToolsForRequest === 'function') {
+                // MCP is enabled - use MCP tools
+                const mcpTools = this.getMCPToolsForRequest();
+                if (mcpTools.length > 0) {
+                    toolsConfig = {
+                        tools: mcpTools,
+                        tool_choice: 'auto',  // MCP always uses auto
+                        parallel_tool_calls: false  // Sequential for reliable execution
+                    };
+                    usingMCPTools = true;
+                    console.log('=== Using MCP Tools ===');
+                    console.log('MCP tools:', mcpTools.length);
+                    console.log('Tool names:', mcpTools.map(t => t.function?.name));
+                }
+            }
+            
+            if (!usingMCPTools) {
+                // MCP not enabled or no MCP tools - use custom tools from Tool Calling panel
+                toolsConfig = this.getToolsForRequest();
+                console.log('=== Using Custom Tools ===');
+            }
             
             // Build request body
             // Check if tools are being used - use non-streaming for tool calls
@@ -2004,6 +2099,9 @@ number ::= [0-9]+`
                 stream: useStreaming
                 // No stop_tokens - let vLLM handle them automatically
             };
+            
+            // Store flag for response handling (Phase 2: MCP tool execution)
+            this._currentRequestUsingMCP = usingMCPTools;
             
             // Add tools if configured
             console.log('=== sendMessage: toolsConfig ===', toolsConfig);
@@ -2052,20 +2150,42 @@ number ::= [0-9]+`
                     const message = choice.message;
                     
                     if (message && message.tool_calls && message.tool_calls.length > 0) {
-                        // Display tool calls
+                        // Display tool calls (and text content if present)
                         console.log('🔧 Tool calls received:', message.tool_calls);
-                        const toolCallsHtml = this.formatToolCallMessage(message.tool_calls);
-                        textSpan.innerHTML = toolCallsHtml;
+                        console.log('📝 Message content:', message.content);
+                        console.log('📝 Full message object:', JSON.stringify(message, null, 2));
+                        
+                        // Build HTML with optional text content + tool calls
+                        let fullHtml = '';
+                        
+                        // Show text content if present
+                        if (message.content && message.content.trim()) {
+                            console.log('📝 Adding text content to display');
+                            fullHtml += `<div class="assistant-text-content">${this.escapeHtml(message.content)}</div>`;
+                        } else {
+                            console.log('📝 No text content to display (null or empty)');
+                        }
+                        
+                        // Use different format for MCP vs custom tools
+                        if (this._currentRequestUsingMCP) {
+                            // MCP tools - show with Execute/Skip buttons
+                            fullHtml += this.formatMCPToolCallMessage(message.tool_calls);
+                        } else {
+                            // Custom tools - display only (manual handling)
+                            fullHtml += this.formatToolCallMessage(message.tool_calls);
+                        }
+                        
+                        textSpan.innerHTML = fullHtml;
                         assistantMessageDiv.classList.add('tool-call');
                         
-                        // Add to chat history
+                        // Add to chat history (include content if present)
                         this.chatHistory.push({
                             role: 'assistant',
-                            content: null,
+                            content: message.content || null,
                             tool_calls: message.tool_calls
                         });
                     } else if (message && message.content) {
-                        // Display text content
+                        // Display text content only
                         textSpan.textContent = message.content;
                         this.chatHistory.push({role: 'assistant', content: message.content});
                     } else {
@@ -2279,7 +2399,39 @@ number ::= [0-9]+`
                 if (!fullText || fullText.match(/^[\s\n\r]+$/)) {
                     textSpan.textContent = 'Model generated only whitespace. Try: 1) Clear system prompt, 2) Lower temperature, 3) Different model';
                     assistantMessageDiv.classList.add('error');
-                } else {
+                } 
+                // 4. Check for malformed tool call patterns in the text
+                // This happens when vLLM's tool parser fails but returns the raw output
+                else if (toolsWereRequested && this.detectMalformedToolCall(fullText)) {
+                    console.warn('⚠️ Detected malformed tool call in response text:', fullText);
+                    
+                    const errorMsg = `⚠️ Tool Parsing Error
+
+The model tried to call a tool but generated malformed JSON that couldn't be parsed.
+
+This usually happens when:
+• Max Tokens is too low (increase to 1024+)
+• Model is struggling with the tool call format
+• Too many tools available (simplify your setup)
+
+Suggestions:
+1. Increase "Max Tokens" in Chat Settings
+2. Use a larger model (Qwen 2.5 7B+, Llama 3.1 8B+)
+3. Use fewer tools / simpler MCP server
+
+Raw output (for debugging):
+${fullText.substring(0, 200)}${fullText.length > 200 ? '...' : ''}`;
+                    
+                    textSpan.textContent = errorMsg;
+                    textSpan.classList.add('message-text');
+                    assistantMessageDiv.classList.add('error');
+                    
+                    // Also log to console for debugging
+                    console.error('🔧 MALFORMED TOOL CALL DETECTED:');
+                    console.error('  Full text:', fullText);
+                    console.error('  Check vLLM server logs for: "Error in extracting tool call from response"');
+                }
+                else {
                     textSpan.textContent = fullText;
                     this.chatHistory.push({role: 'assistant', content: fullText});
                 }
@@ -4843,11 +4995,13 @@ number ::= [0-9]+`
     }
     
     getToolsForRequest() {
-        // Return tools array for API request, or null if empty/disabled
+        // Return CUSTOM tools array for API request, or null if empty/disabled
+        // MCP tools are handled separately via getMCPToolsForRequest()
+        // This method is for the Tool Calling panel only
         const toolChoice = this.elements.toolChoice?.value || '';
         
         // Debug logging
-        console.log('=== getToolsForRequest DEBUG ===');
+        console.log('=== getToolsForRequest (Custom Tools) ===');
         console.log('toolChoice dropdown value:', JSON.stringify(toolChoice));
         console.log('this.tools.length:', this.tools.length);
         console.log('this.tools:', JSON.stringify(this.tools.map(t => t.function?.name)));
@@ -4875,8 +5029,32 @@ number ::= [0-9]+`
         return result;
     }
     
+    /**
+     * Detect if text contains malformed tool call patterns
+     * This catches cases where vLLM's tool parser failed but still returned content
+     */
+    detectMalformedToolCall(text) {
+        if (!text) return false;
+        
+        // Common patterns that indicate a failed tool call parse:
+        // 1. Hermes format: <tool_call>...</tool_call>
+        // 2. Raw JSON with function name/arguments
+        // 3. Truncated JSON (ends with incomplete structure)
+        const patterns = [
+            /<tool_call>/i,                          // Hermes XML-style tool call tag
+            /<\/tool_call>/i,                        // Closing tool call tag
+            /\{"name"\s*:\s*"[^"]+"/,                // JSON with "name" field
+            /\{"function"\s*:\s*\{/,                 // JSON with function object
+            /"arguments"\s*:\s*\{[^}]*$/,            // Truncated arguments JSON
+            /\{\s*"type"\s*:\s*"function"/,          // Function type declaration
+            /<function=/i,                           // Alternative function tag format
+        ];
+        
+        return patterns.some(pattern => pattern.test(text));
+    }
+    
     formatToolCallMessage(toolCalls) {
-        // Format tool calls for display in chat
+        // Format tool calls for display in chat (custom tools - no execution)
         if (!toolCalls || toolCalls.length === 0) return '';
         
         return `
@@ -4900,6 +5078,407 @@ number ::= [0-9]+`
                 }).join('')}
             </div>
         `;
+    }
+    
+    formatMCPToolCallMessage(toolCalls) {
+        // Format MCP tool calls with individual Execute/Skip buttons for each tool
+        if (!toolCalls || toolCalls.length === 0) return '';
+        
+        // Store pending MCP tool calls for execution
+        this._pendingMCPToolCalls = [...toolCalls];
+        this._mcpToolResults = [];
+        this._mcpToolsProcessed = 0;
+        
+        return `
+            <div class="mcp-tool-calls-container">
+                <div class="mcp-tool-calls-header">
+                    <span class="mcp-icon">🔗</span>
+                    <span>MCP Tool Call${toolCalls.length > 1 ? 's' : ''} - Review Each Tool</span>
+                </div>
+                ${toolCalls.map((tc, index) => {
+                    const func = tc.function || {};
+                    let argsDisplay = func.arguments || '{}';
+                    try {
+                        argsDisplay = JSON.stringify(JSON.parse(func.arguments), null, 2);
+                    } catch (e) {}
+                    
+                    return `
+                        <div class="mcp-tool-call-item" data-tool-index="${index}" data-tool-id="${tc.id}">
+                            <div class="mcp-tool-call-header">
+                                <span class="tool-name">${this.escapeHtml(func.name || 'unknown')}</span>
+                                <span class="tool-status pending">Awaiting Decision</span>
+                            </div>
+                            <details class="mcp-tool-args-details" open>
+                                <summary>Arguments</summary>
+                                <pre class="mcp-tool-args">${this.escapeHtml(argsDisplay)}</pre>
+                            </details>
+                            <div class="mcp-tool-actions-individual">
+                                <button class="btn btn-success btn-sm" onclick="window.vllmUI.executeSingleMCPTool(${index})">
+                                    Execute
+                                </button>
+                                <button class="btn btn-secondary btn-sm" onclick="window.vllmUI.skipSingleMCPTool(${index})">
+                                    Skip
+                                </button>
+                            </div>
+                            <div class="mcp-tool-result" style="display: none;"></div>
+                        </div>
+                    `;
+                }).join('')}
+                <div class="mcp-tool-continue" style="display: none;">
+                    <button class="btn btn-primary" onclick="window.vllmUI.continueMCPConversation()">
+                        Continue Conversation
+                    </button>
+                    <button class="btn btn-secondary" onclick="window.vllmUI.endMCPConversation()">
+                        Done
+                    </button>
+                </div>
+            </div>
+        `;
+    }
+    
+    async executeSingleMCPTool(index) {
+        if (!this._pendingMCPToolCalls || !this._pendingMCPToolCalls[index]) {
+            this.showNotification('Tool not found', 'warning');
+            return;
+        }
+        
+        const tc = this._pendingMCPToolCalls[index];
+        const func = tc.function || {};
+        const toolName = func.name;
+        // Get the LAST (most recent) tool calls container to avoid targeting old ones
+        const containers = document.querySelectorAll('.mcp-tool-calls-container');
+        const container = containers[containers.length - 1];
+        const itemEl = container?.querySelector(`[data-tool-index="${index}"]`);
+        const statusEl = itemEl?.querySelector('.tool-status');
+        const resultEl = itemEl?.querySelector('.mcp-tool-result');
+        const actionsEl = itemEl?.querySelector('.mcp-tool-actions-individual');
+        
+        // Validate tool exists in MCP tools (check ALL tools, not just enabled ones)
+        const allMcpTools = this.mcpTools || [];
+        const toolExists = allMcpTools.some(t => t.function?.name === toolName);
+        
+        if (!toolExists) {
+            // Tool doesn't exist - model hallucinated the tool name
+            if (actionsEl) actionsEl.style.display = 'none';
+            if (statusEl) {
+                statusEl.textContent = 'Not Found';
+                statusEl.className = 'tool-status error';
+            }
+            if (resultEl) {
+                resultEl.style.display = 'block';
+                const availableTools = allMcpTools.map(t => t.function?.name).join(', ') || 'none';
+                resultEl.innerHTML = `
+                    <div class="tool-error">
+                        <strong>Tool "${this.escapeHtml(toolName)}" does not exist.</strong><br>
+                        The model hallucinated this tool name.<br><br>
+                        <em>Available tools:</em> ${this.escapeHtml(availableTools)}
+                    </div>
+                `;
+            }
+            
+            // Add error result
+            this._mcpToolResults.push({
+                tool_call_id: tc.id,
+                role: 'tool',
+                content: `Error: Tool "${toolName}" does not exist. Available tools: ${allMcpTools.map(t => t.function?.name).join(', ')}`
+            });
+            
+            this._mcpToolsProcessed++;
+            this.checkMCPToolsComplete();
+            return;
+        }
+        
+        // Hide action buttons for this tool
+        if (actionsEl) actionsEl.style.display = 'none';
+        
+        // Update status to executing
+        if (statusEl) {
+            statusEl.textContent = 'Executing...';
+            statusEl.className = 'tool-status executing';
+        }
+        
+        try {
+            // Parse arguments
+            let args = {};
+            try {
+                args = JSON.parse(func.arguments || '{}');
+            } catch (e) {
+                console.error('Failed to parse tool arguments:', e);
+            }
+            
+            console.log(`🔧 Executing MCP tool: ${func.name}`, args);
+            
+            // Call MCP backend
+            const response = await fetch('/api/mcp/call', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    tool_name: func.name,
+                    arguments: args
+                })
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'Tool execution failed');
+            }
+            
+            const result = await response.json();
+            console.log(`✅ Tool result for ${func.name}:`, result);
+            
+            // Update UI
+            if (statusEl) {
+                statusEl.textContent = 'Executed';
+                statusEl.className = 'tool-status success';
+            }
+            if (resultEl) {
+                resultEl.style.display = 'block';
+                resultEl.innerHTML = `<details open><summary>Result</summary><pre>${this.escapeHtml(JSON.stringify(result.result, null, 2))}</pre></details>`;
+            }
+            
+            // Store result for chat continuation
+            this._mcpToolResults.push({
+                tool_call_id: tc.id,
+                role: 'tool',
+                name: toolName,  // Include tool name for proper message format
+                content: typeof result.result === 'string' ? result.result : JSON.stringify(result.result)
+            });
+            
+            console.log('✅ Tool result stored:', { tool_call_id: tc.id, name: toolName });
+            
+        } catch (error) {
+            console.error(`❌ Tool execution failed for ${func.name}:`, error);
+            
+            if (statusEl) {
+                statusEl.textContent = 'Failed';
+                statusEl.className = 'tool-status error';
+            }
+            if (resultEl) {
+                resultEl.style.display = 'block';
+                resultEl.innerHTML = `<div class="tool-error">Error: ${this.escapeHtml(error.message)}</div>`;
+            }
+            
+            // Still add error result so conversation can continue
+            this._mcpToolResults.push({
+                tool_call_id: tc.id,
+                role: 'tool',
+                name: toolName,  // Include tool name for proper message format
+                content: `Error: ${error.message}`
+            });
+        }
+        
+        // Mark this tool as processed
+        this._mcpToolsProcessed++;
+        this.checkMCPToolsComplete();
+    }
+    
+    skipSingleMCPTool(index) {
+        if (!this._pendingMCPToolCalls || !this._pendingMCPToolCalls[index]) {
+            return;
+        }
+        
+        const tc = this._pendingMCPToolCalls[index];
+        const func = tc.function || {};
+        // Get the LAST (most recent) tool calls container to avoid targeting old ones
+        const containers = document.querySelectorAll('.mcp-tool-calls-container');
+        const container = containers[containers.length - 1];
+        const itemEl = container?.querySelector(`[data-tool-index="${index}"]`);
+        const statusEl = itemEl?.querySelector('.tool-status');
+        const actionsEl = itemEl?.querySelector('.mcp-tool-actions-individual');
+        
+        // Hide action buttons for this tool
+        if (actionsEl) actionsEl.style.display = 'none';
+        
+        // Update status
+        if (statusEl) {
+            statusEl.textContent = 'Skipped';
+            statusEl.className = 'tool-status skipped';
+        }
+        this._mcpToolResults.push({
+            tool_call_id: tc.id,
+            role: 'tool',
+            name: func.name,  // Include tool name for proper message format
+            content: 'Tool execution was skipped by user.'
+        });
+        
+        // Mark this tool as processed
+        this._mcpToolsProcessed++;
+        this.checkMCPToolsComplete();
+    }
+    
+    checkMCPToolsComplete() {
+        // Check if all tools have been processed (executed or skipped)
+        if (!this._pendingMCPToolCalls) return;
+        
+        const totalTools = this._pendingMCPToolCalls.length;
+        const processed = this._mcpToolsProcessed || 0;
+        
+        if (processed >= totalTools) {
+            // All tools processed - show continue options
+            // Get the LAST (most recent) tool calls container
+            const containers = document.querySelectorAll('.mcp-tool-calls-container');
+            const container = containers[containers.length - 1];
+            const header = container?.querySelector('.mcp-tool-calls-header span:last-child');
+            const continueDiv = container?.querySelector('.mcp-tool-continue');
+            
+            if (header) header.textContent = `All ${totalTools} tool${totalTools > 1 ? 's' : ''} reviewed`;
+            if (continueDiv) continueDiv.style.display = 'flex';
+            
+            // Clear pending
+            this._pendingMCPToolCalls = null;
+        }
+    }
+    
+    async continueMCPConversation() {
+        // Phase 3: Continue conversation with tool results
+        if (!this._mcpToolResults || this._mcpToolResults.length === 0) {
+            this.showNotification('No tool results to continue with', 'warning');
+            return;
+        }
+        
+        // Add tool results to chat history
+        for (const result of this._mcpToolResults) {
+            this.chatHistory.push(result);
+        }
+        
+        // Clear stored results
+        this._mcpToolResults = null;
+        
+        // Trigger a new message to continue the conversation
+        // We use a special flag to indicate this is a continuation
+        this._mcpContinuation = true;
+        
+        // Re-enable send button and trigger send with empty message
+        this.elements.sendBtn.disabled = false;
+        this.elements.sendBtn.textContent = 'Send';
+        
+        // Send continuation request
+        await this.sendMCPContinuation();
+    }
+    
+    async sendMCPContinuation() {
+        // Send a follow-up request with tool results already in history
+        this.elements.sendBtn.disabled = true;
+        this.elements.sendBtn.textContent = 'Generating...';
+        
+        const assistantMessageDiv = this.addChatMessage('assistant', '▌');
+        const textSpan = assistantMessageDiv.querySelector('.message-text');
+        
+        try {
+            const systemPrompt = this.elements.systemPrompt.value.trim();
+            let messagesToSend = [...this.chatHistory];
+            
+            if (systemPrompt) {
+                messagesToSend = [
+                    {role: 'system', content: systemPrompt},
+                    ...this.chatHistory
+                ];
+            }
+            
+            console.log('📤 Sending MCP continuation with messages:', JSON.stringify(messagesToSend, null, 2));
+            
+            // Don't send tools in continuation - force text response
+            // This prevents the model from calling the same tool again in a loop
+            const requestBody = {
+                messages: messagesToSend,
+                temperature: parseFloat(this.elements.temperature.value),
+                max_tokens: parseInt(this.elements.maxTokens.value),
+                stream: true  // Use streaming since no tools
+            };
+            
+            console.log('📤 Continuation request (no tools, streaming):', requestBody);
+            
+            const response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody)
+            });
+            
+            if (!response.ok) {
+                throw new Error(await response.text() || 'Failed to continue conversation');
+            }
+            
+            // Check content type to determine response format
+            const contentType = response.headers.get('content-type') || '';
+            
+            if (contentType.includes('application/json')) {
+                // Non-streaming JSON response
+                const jsonResponse = await response.json();
+                console.log('📤 MCP continuation response:', jsonResponse);
+                
+                if (jsonResponse.choices && jsonResponse.choices.length > 0) {
+                    const message = jsonResponse.choices[0].message;
+                    
+                    // Display text content if present
+                    if (message.content) {
+                        textSpan.textContent = message.content;
+                        this.chatHistory.push({ role: 'assistant', content: message.content });
+                    }
+                    
+                    // If model STILL wants to call tools, show them (but this shouldn't happen)
+                    if (message.tool_calls && message.tool_calls.length > 0) {
+                        console.warn('⚠️ Model still requesting tool calls after continuation');
+                        // Just show the text, ignore the tool calls to prevent infinite loop
+                        if (!message.content) {
+                            textSpan.textContent = 'Model is trying to call tools again. Please rephrase your question.';
+                        }
+                    }
+                } else {
+                    textSpan.textContent = 'No response from model';
+                }
+            } else {
+                // Streaming SSE response
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let fullText = '';
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n');
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            if (data === '[DONE]') continue;
+                            
+                            try {
+                                const parsed = JSON.parse(data);
+                                const content = parsed.choices?.[0]?.delta?.content || '';
+                                if (content) {
+                                    fullText += content;
+                                    textSpan.textContent = fullText;
+                                }
+                            } catch (e) {
+                                // Skip invalid JSON
+                            }
+                        }
+                    }
+                }
+                
+                if (fullText) {
+                    this.chatHistory.push({ role: 'assistant', content: fullText });
+                } else {
+                    textSpan.textContent = 'No response from model';
+                }
+            }
+            
+        } catch (error) {
+            textSpan.textContent = `Error: ${error.message}`;
+            assistantMessageDiv.classList.add('error');
+        } finally {
+            this.elements.sendBtn.disabled = false;
+            this.elements.sendBtn.textContent = 'Send';
+            this._mcpContinuation = false;
+        }
+    }
+    
+    endMCPConversation() {
+        // User chose not to continue after tool execution
+        this._mcpToolResults = null;
+        this.showNotification('Conversation ended', 'info');
     }
     
     escapeHtml(text) {

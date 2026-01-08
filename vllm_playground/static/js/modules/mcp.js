@@ -85,9 +85,35 @@ const MCPMethods = {
         if (toggle) {
             toggle.addEventListener('change', (e) => {
                 this.mcpEnabled = e.target.checked;
-                this.updateMCPChatPanel();
+                
                 if (this.mcpEnabled) {
-                    this.loadMCPToolsFromSelected();
+                    // Auto-select all connected servers when MCP is enabled
+                    const connectedServers = (this.mcpConfigs || []).filter(c => c.connected).map(c => c.name);
+                    
+                    if (connectedServers.length === 0) {
+                        // No servers connected - show warning and disable
+                        this.showNotification('No MCP servers connected. Connect to a server first.', 'warning');
+                        this.mcpEnabled = false;
+                        e.target.checked = false;
+                    } else {
+                        // Auto-select all connected servers
+                        this.mcpSelectedServers = [...connectedServers];
+                        this.renderMCPServerCheckboxes();
+                        this.loadMCPToolsFromSelected();
+                        this.showNotification(`MCP enabled with ${connectedServers.length} server${connectedServers.length > 1 ? 's' : ''}`, 'success');
+                    }
+                } else {
+                    // MCP disabled - clear selection
+                    this.mcpSelectedServers = [];
+                    this.mcpTools = [];
+                    this.updateMCPToolsSummary();
+                }
+                
+                this.updateMCPChatPanel();
+                
+                // Update toolbar indicator
+                if (typeof this.updateModifiedIndicators === 'function') {
+                    this.updateModifiedIndicators();
                 }
             });
         }
@@ -238,9 +264,23 @@ const MCPMethods = {
     
     refreshMCPConfigView() {
         if (this.mcpAvailable) {
-            this.loadMCPConfigs();
+            this.loadMCPConfigs().then(() => {
+                // Update tool counts for all connected servers after configs are loaded
+                this.refreshAllMCPToolCounts();
+            });
             this.loadMCPPresets();
         }
+    },
+    
+    refreshAllMCPToolCounts() {
+        // Update tool count badges for all servers to reflect disabled tools
+        if (!this.mcpConfigs) return;
+        
+        this.mcpConfigs.forEach(config => {
+            if (config.connected) {
+                this.updateMCPToolCount(config.name);
+            }
+        });
     },
     
     // ============================================
@@ -464,17 +504,29 @@ const MCPMethods = {
         
         // Update the tools count in header
         this.updateMCPToolCount(serverName);
+        
+        // Sync with inline chat panel
+        this.updateMCPToolsSummary();
     },
     
     updateMCPToolCount(serverName) {
-        // Get total tools for this server
-        const totalTools = this._mcpServerToolCounts?.[serverName] || 0;
+        // Get total tools for this server from cache or from config
+        let totalTools = this._mcpServerToolCounts?.[serverName];
+        
+        // Fallback to config.tools_count if not in cache
+        if (totalTools === undefined && this.mcpConfigs) {
+            const config = this.mcpConfigs.find(c => c.name === serverName);
+            totalTools = config?.tools_count || 0;
+        }
+        totalTools = totalTools || 0;
         
         // Count disabled tools for this server
         let disabledCount = 0;
-        this.mcpDisabledTools.forEach(key => {
-            if (key.startsWith(`${serverName}:`)) disabledCount++;
-        });
+        if (this.mcpDisabledTools) {
+            this.mcpDisabledTools.forEach(key => {
+                if (key.startsWith(`${serverName}:`)) disabledCount++;
+            });
+        }
         
         const enabledCount = totalTools - disabledCount;
         
@@ -483,7 +535,12 @@ const MCPMethods = {
         if (card) {
             const toolsBadge = card.querySelector('.capability-badge[title="Tools"]');
             if (toolsBadge) {
-                toolsBadge.innerHTML = `<span class="icon-mcp-tools"></span> ${enabledCount}/${totalTools}`;
+                // Only show enabled/total if some are disabled
+                if (disabledCount > 0) {
+                    toolsBadge.innerHTML = `<span class="icon-mcp-tools"></span> ${enabledCount}/${totalTools}`;
+                } else {
+                    toolsBadge.innerHTML = `<span class="icon-mcp-tools"></span> ${totalTools}`;
+                }
             }
         }
     },
@@ -512,6 +569,9 @@ const MCPMethods = {
         });
         
         this.updateMCPToolCount(serverName);
+        
+        // Sync with inline chat panel
+        this.updateMCPToolsSummary();
     },
     
     getEnabledMCPTools(serverName) {
@@ -532,8 +592,16 @@ const MCPMethods = {
         this.mcpPresets.forEach(preset => {
             const card = document.createElement('div');
             card.className = 'mcp-preset-card';
+            
+            const docsLink = preset.docs_url 
+                ? `<a href="${this.escapeHtml(preset.docs_url)}" target="_blank" class="preset-docs-link" title="View documentation" onclick="event.stopPropagation()">📖</a>`
+                : '';
+            
             card.innerHTML = `
-                <div class="preset-name">${this.escapeHtml(preset.display_name || preset.name)}</div>
+                <div class="preset-header">
+                    <div class="preset-name">${this.escapeHtml(preset.display_name || preset.name)}</div>
+                    ${docsLink}
+                </div>
                 <div class="preset-description">${this.escapeHtml(preset.description || '')}</div>
             `;
             card.addEventListener('click', () => this.applyMCPPreset(preset));
@@ -777,7 +845,34 @@ const MCPMethods = {
             }
             
             this.showNotification(`Server "${name}" deleted`, 'success');
-            this.loadMCPConfigs();
+            
+            // Clean up state: remove from selected servers
+            if (this.mcpSelectedServers) {
+                this.mcpSelectedServers = this.mcpSelectedServers.filter(n => n !== name);
+            }
+            
+            // Clean up disabled tools for this server
+            if (this.mcpDisabledTools) {
+                const toRemove = [];
+                this.mcpDisabledTools.forEach(key => {
+                    if (key.startsWith(`${name}:`)) {
+                        toRemove.push(key);
+                    }
+                });
+                toRemove.forEach(key => this.mcpDisabledTools.delete(key));
+            }
+            
+            // Clean up tool counts cache
+            if (this._mcpServerToolCounts) {
+                delete this._mcpServerToolCounts[name];
+            }
+            
+            // Reload configs (this also calls updateMCPChatPanel)
+            await this.loadMCPConfigs();
+            
+            // Refresh tools from current selection
+            await this.loadMCPToolsFromSelected();
+            
         } catch (error) {
             this.showNotification(`Failed to delete server: ${error.message}`, 'error');
         }
@@ -830,7 +925,16 @@ const MCPMethods = {
             }
             
             this.showNotification(`Disconnected from "${name}"`, 'success');
-            this.loadMCPConfigs();
+            
+            // Remove from selected servers (disconnected servers can't be used)
+            if (this.mcpSelectedServers) {
+                this.mcpSelectedServers = this.mcpSelectedServers.filter(n => n !== name);
+            }
+            
+            // Reload configs and refresh tools
+            await this.loadMCPConfigs();
+            await this.loadMCPToolsFromSelected();
+            
         } catch (error) {
             this.showNotification(`Failed to disconnect: ${error.message}`, 'error');
         }
@@ -894,9 +998,7 @@ const MCPMethods = {
             label.className = 'server-checkbox';
             label.innerHTML = `
                 <input type="checkbox" value="${this.escapeHtml(config.name)}" ${isSelected ? 'checked' : ''} ${!config.connected ? 'disabled' : ''}>
-                <span class="server-name">${this.escapeHtml(config.name)}</span>
-                <span class="server-status ${config.connected ? 'connected' : 'disconnected'}">●</span>
-                <span class="tools-badge">${config.tools_count || 0} tools</span>
+                <span class="server-name ${!config.connected ? 'disconnected' : ''}">${this.escapeHtml(config.name)}</span>
             `;
             
             const checkbox = label.querySelector('input');
@@ -909,6 +1011,10 @@ const MCPMethods = {
                     this.mcpSelectedServers = this.mcpSelectedServers.filter(n => n !== config.name);
                 }
                 this.loadMCPToolsFromSelected();
+                // Update toolbar indicator
+                if (typeof this.updateModifiedIndicators === 'function') {
+                    this.updateModifiedIndicators();
+                }
             });
             
             container.appendChild(label);
@@ -920,6 +1026,10 @@ const MCPMethods = {
         this.mcpSelectedServers = select ? [...connectedServers] : [];
         this.renderMCPServerCheckboxes();
         this.loadMCPToolsFromSelected();
+        // Update toolbar indicator
+        if (typeof this.updateModifiedIndicators === 'function') {
+            this.updateModifiedIndicators();
+        }
     },
     
     async loadMCPToolsFromSelected() {
@@ -947,23 +1057,52 @@ const MCPMethods = {
         const serversCount = document.getElementById('mcp-active-servers-count');
         const summary = document.getElementById('mcp-chat-tools-summary');
         
+        // Count enabled tools (total - disabled)
+        const enabledTools = this.getMCPToolsForRequest();
+        const enabledCount = enabledTools.length;
+        const totalCount = this.mcpTools.length;
+        
         if (toolsCount) {
-            toolsCount.textContent = `${this.mcpTools.length} tool${this.mcpTools.length !== 1 ? 's' : ''}`;
+            // Show "X/Y tools" if some are disabled, otherwise just "X tools"
+            if (enabledCount < totalCount) {
+                toolsCount.textContent = `${enabledCount}/${totalCount} tools`;
+            } else {
+                toolsCount.textContent = `${enabledCount} tool${enabledCount !== 1 ? 's' : ''}`;
+            }
         }
         if (serversCount) {
             serversCount.textContent = `${this.mcpSelectedServers.length} server${this.mcpSelectedServers.length !== 1 ? 's' : ''}`;
         }
         if (summary) {
-            summary.style.display = this.mcpTools.length > 0 ? 'flex' : 'none';
+            summary.style.display = totalCount > 0 ? 'flex' : 'none';
         }
     },
     
     getMCPToolsForRequest() {
         // Return MCP tools in OpenAI format for chat requests
+        // Filters out tools that have been disabled by the user
         if (!this.mcpEnabled || this.mcpTools.length === 0) {
             return [];
         }
-        return this.mcpTools;
+        
+        // Filter out disabled tools
+        // mcpDisabledTools contains keys like "serverName:toolName"
+        const enabledTools = this.mcpTools.filter(tool => {
+            const serverName = tool._mcp_server;
+            const toolName = tool.function?.name;
+            if (!serverName || !toolName) return true; // Include if can't determine
+            
+            const toolKey = `${serverName}:${toolName}`;
+            const isDisabled = this.mcpDisabledTools && this.mcpDisabledTools.has(toolKey);
+            
+            if (isDisabled) {
+                console.log(`[MCP] Filtering out disabled tool: ${toolKey}`);
+            }
+            return !isDisabled;
+        });
+        
+        console.log(`[MCP] getMCPToolsForRequest: ${enabledTools.length}/${this.mcpTools.length} tools enabled`);
+        return enabledTools;
     },
     
     // ============================================

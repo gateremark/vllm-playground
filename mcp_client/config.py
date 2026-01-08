@@ -157,120 +157,61 @@ class MCPConfigStore:
 
 
 # Built-in presets for common MCP servers
+# Reference: https://github.com/modelcontextprotocol/servers
 MCP_PRESETS = [
-    {
-        "name": "vllm",
-        "display_name": "vLLM",
-        "description": "Chat, benchmarks, model info. Note: If Playground manages vLLM, disable start/stop/restart tools to avoid port conflicts.",
-        "transport": "stdio",
-        "command": "uvx",
-        "args": ["vllm-mcp-server"],
-        "env": {
-            "VLLM_BASE_URL": "${VLLM_URL}",
-            "VLLM_HF_TOKEN": "${HF_TOKEN}"
-        },
-        "placeholder_vars": {
-            "VLLM_URL": {
-                "label": "vLLM Server URL",
-                "placeholder": "http://localhost:8000",
-                "required": False
-            },
-            "HF_TOKEN": {
-                "label": "HuggingFace Token (optional)",
-                "placeholder": "hf_xxxxxxxxxxxx",
-                "required": False,
-                "secret": True
-            }
-        },
-        "docs_url": "https://github.com/micytao/vllm-mcp-server"
-    },
     {
         "name": "filesystem",
         "display_name": "Filesystem",
-        "description": "Read and write files in a specified directory",
+        "description": "Secure file operations with configurable access controls",
         "transport": "stdio",
         "command": "npx",
         "args": ["-y", "@modelcontextprotocol/server-filesystem", "${DIRECTORY}"],
         "env": {},
         "placeholder_vars": {
             "DIRECTORY": {
-                "label": "Directory Path",
+                "label": "Allowed Directory",
                 "placeholder": "/home/user/documents",
                 "required": True
             }
-        }
-    },
-    {
-        "name": "github",
-        "display_name": "GitHub",
-        "description": "Interact with GitHub repositories, issues, and PRs",
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-github"],
-        "env": {
-            "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
         },
-        "placeholder_vars": {
-            "GITHUB_TOKEN": {
-                "label": "GitHub Token",
-                "placeholder": "ghp_xxxxxxxxxxxx",
-                "required": True,
-                "secret": True
-            }
-        }
+        "docs_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem"
     },
     {
-        "name": "brave-search",
-        "display_name": "Brave Search",
-        "description": "Web search using Brave Search API",
+        "name": "git",
+        "display_name": "Git",
+        "description": "Tools to read, search, and manipulate Git repositories",
         "transport": "stdio",
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-brave-search"],
-        "env": {
-            "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+        "command": "uvx",
+        "args": ["mcp-server-git", "--repository", "${REPOSITORY}"],
+        "env": {},
+        "placeholder_vars": {
+            "REPOSITORY": {
+                "label": "Repository Path",
+                "placeholder": "/path/to/git/repo",
+                "required": True
+            }
         },
-        "placeholder_vars": {
-            "BRAVE_API_KEY": {
-                "label": "Brave API Key",
-                "placeholder": "BSA...",
-                "required": True,
-                "secret": True
-            }
-        }
-    },
-    {
-        "name": "memory",
-        "display_name": "Memory",
-        "description": "Persistent memory storage for conversations",
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-memory"],
-        "env": {}
+        "docs_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/git"
     },
     {
         "name": "fetch",
         "display_name": "Fetch",
-        "description": "Fetch and parse web pages",
+        "description": "Web content fetching and conversion for efficient LLM usage",
         "transport": "stdio",
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-fetch"],
-        "env": {}
+        "command": "uvx",
+        "args": ["mcp-server-fetch"],
+        "env": {},
+        "docs_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch"
     },
     {
-        "name": "sqlite",
-        "display_name": "SQLite",
-        "description": "Query and manage SQLite databases",
+        "name": "time",
+        "display_name": "Time",
+        "description": "Time and timezone conversion capabilities",
         "transport": "stdio",
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-sqlite", "${DATABASE_PATH}"],
+        "command": "uvx",
+        "args": ["mcp-server-time"],
         "env": {},
-        "placeholder_vars": {
-            "DATABASE_PATH": {
-                "label": "Database Path",
-                "placeholder": "/path/to/database.db",
-                "required": True
-            }
-        }
+        "docs_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/time"
     }
 ]
 

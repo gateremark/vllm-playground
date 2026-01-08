@@ -1097,11 +1097,28 @@
     background: var(--hover-overlay);
 }
 
+.mcp-preset-card .preset-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
 .mcp-preset-card .preset-name {
     font-weight: 600;
     font-size: 0.9rem;
     color: var(--text-primary);
-    margin-bottom: 6px;
+}
+
+.mcp-preset-card .preset-docs-link {
+    font-size: 0.85rem;
+    text-decoration: none;
+    opacity: 0.6;
+    transition: opacity 0.2s ease;
+}
+
+.mcp-preset-card .preset-docs-link:hover {
+    opacity: 1;
 }
 
 .mcp-preset-card .preset-description {
@@ -1238,6 +1255,73 @@
     padding: 12px;
 }
 
+/* MCP Info Tip */
+.mcp-info-tip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: rgba(14, 165, 233, 0.1);
+    border: 1px solid rgba(14, 165, 233, 0.2);
+    border-radius: 6px;
+    margin-bottom: 10px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.mcp-info-tip .info-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+
+[data-theme="light"] .mcp-info-tip {
+    background: rgba(14, 165, 233, 0.05);
+}
+
+/* MCP Security Warning */
+.mcp-security-warning {
+    display: flex;
+    gap: 10px;
+    padding: 10px 12px;
+    background: rgba(234, 179, 8, 0.1);
+    border: 1px solid rgba(234, 179, 8, 0.3);
+    border-radius: 6px;
+    margin-bottom: 12px;
+    font-size: 0.8rem;
+}
+
+.mcp-security-warning .warning-icon {
+    font-size: 1.2rem;
+    flex-shrink: 0;
+}
+
+.mcp-security-warning .warning-content {
+    flex: 1;
+}
+
+.mcp-security-warning strong {
+    display: block;
+    color: var(--warning-color);
+    margin-bottom: 4px;
+    font-size: 0.85rem;
+}
+
+.mcp-security-warning ul {
+    margin: 0;
+    padding-left: 16px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.mcp-security-warning li {
+    margin-bottom: 2px;
+}
+
+[data-theme="light"] .mcp-security-warning {
+    background: rgba(234, 179, 8, 0.08);
+    border-color: rgba(234, 179, 8, 0.25);
+}
+
 .mcp-no-servers {
     text-align: center;
     padding: 16px;
@@ -1320,6 +1404,11 @@
     font-size: 0.85rem;
     font-weight: 500;
     color: var(--text-primary);
+}
+
+.mcp-server-checkbox .server-name.disconnected {
+    color: var(--text-muted);
+    font-style: italic;
 }
 
 .mcp-server-checkbox .server-tools {
@@ -1568,5 +1657,206 @@
 
 [data-theme="light"] .mcp-tools-summary {
     background: #f8fafc;
+}
+
+/* ============================================
+   MCP Tool Call UI (Chat Integration)
+   ============================================ */
+
+/* Assistant text content before tool calls */
+.assistant-text-content {
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color);
+    white-space: pre-wrap;
+    line-height: 1.5;
+}
+
+.mcp-tool-calls-container {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 4px 0;
+}
+
+.mcp-tool-calls-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-color);
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+}
+
+.mcp-tool-calls-header .mcp-icon {
+    font-size: 1rem;
+}
+
+.mcp-tool-call-item {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.mcp-tool-call-item:last-of-type {
+    border-bottom: none;
+}
+
+.mcp-tool-call-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.mcp-tool-call-header .tool-name {
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+    font-weight: 600;
+    color: var(--primary-color);
+}
+
+.mcp-tool-call-header .tool-status {
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 500;
+}
+
+.tool-status.pending {
+    background: var(--warning-color);
+    color: #000;
+}
+
+.tool-status.executing {
+    background: var(--primary-color);
+    color: white;
+    animation: pulse 1s infinite;
+}
+
+.tool-status.success {
+    background: var(--success-color);
+    color: white;
+}
+
+.tool-status.error {
+    background: var(--error-color);
+    color: white;
+}
+
+.tool-status.skipped {
+    background: var(--text-tertiary);
+    color: white;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+.mcp-tool-args-details {
+    margin-top: 6px;
+}
+
+.mcp-tool-args-details summary {
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    user-select: none;
+}
+
+.mcp-tool-args-details summary:hover {
+    color: var(--primary-color);
+}
+
+.mcp-tool-args {
+    margin-top: 6px;
+    padding: 8px;
+    background: var(--bg-primary);
+    border-radius: 4px;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.mcp-tool-result {
+    margin-top: 8px;
+}
+
+.mcp-tool-result details summary {
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--success-color);
+    font-weight: 500;
+    user-select: none;
+}
+
+.mcp-tool-result pre {
+    margin-top: 6px;
+    padding: 8px;
+    background: var(--bg-primary);
+    border-radius: 4px;
+    border-left: 3px solid var(--success-color);
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+    font-size: 0.75rem;
+    color: var(--text-primary);
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.mcp-tool-result .tool-error {
+    padding: 8px;
+    background: rgba(239, 68, 68, 0.1);
+    border-radius: 4px;
+    border-left: 3px solid var(--error-color);
+    color: var(--error-color);
+    font-size: 0.8rem;
+}
+
+/* Individual tool action buttons */
+.mcp-tool-actions-individual {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.mcp-tool-actions-individual .btn-sm {
+    padding: 4px 12px;
+    font-size: 0.8rem;
+}
+
+.mcp-tool-actions-individual .btn-success {
+    background: var(--success-color);
+    border-color: var(--success-color);
+    color: white;
+}
+
+.mcp-tool-actions-individual .btn-success:hover {
+    background: #16a34a;
+    border-color: #16a34a;
+}
+
+/* Continue/Done buttons at bottom */
+.mcp-tool-continue {
+    display: flex;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--bg-tertiary);
+    border-top: 1px solid var(--border-color);
+}
+
+.mcp-tool-continue .btn {
+    flex: 1;
+    padding: 8px 16px;
+    font-size: 0.85rem;
 }
 

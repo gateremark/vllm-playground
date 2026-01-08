@@ -38,6 +38,7 @@
                 <div class="nav-status">
                     <span id="nav-status-dot" class="status-dot"></span>
                     <span id="nav-status-text" class="nav-status-text">Offline</span>
+                    <span id="nav-version" class="nav-version"></span>
                 </div>
                 <button class="nav-collapse-btn" id="nav-collapse-btn" title="Collapse sidebar">
                     <span class="collapse-icon">◀</span>
@@ -179,16 +180,16 @@
                             <div class="form-group mode-toggle-group">
                                 <label>Run Mode</label>
                                 <div class="mode-toggle-buttons">
-                                    <label class="mode-button active" id="run-mode-subprocess-label">
-                                        <input type="radio" name="run-mode" id="run-mode-subprocess" value="subprocess" checked>
+                                    <label class="mode-button" id="run-mode-subprocess-label">
+                                        <input type="radio" name="run-mode" id="run-mode-subprocess" value="subprocess">
                                         <span>⚡ Subprocess</span>
                                     </label>
-                                    <label class="mode-button" id="run-mode-container-label">
-                                        <input type="radio" name="run-mode" id="run-mode-container" value="container">
+                                    <label class="mode-button active" id="run-mode-container-label">
+                                        <input type="radio" name="run-mode" id="run-mode-container" value="container" checked>
                                         <span>📦 Container</span>
                                     </label>
                                 </div>
-                                <small class="form-help" id="run-mode-help-text">Subprocess: Direct (local dev), Container: Isolated (production)</small>
+                                <small class="form-help" id="run-mode-help-text">Container: Isolated (recommended), Subprocess: Direct (requires vLLM installed)</small>
                             </div>
 
                             <!-- CPU/GPU Mode Toggle -->
@@ -376,7 +377,7 @@
                             <div id="chat-container" class="chat-container">
                                 <div class="chat-message system">
                                     <div class="message-content">
-                                        <span class="message-text">Start the vLLM server and begin chatting with your model.</span>
+                                        <span class="message-text">Welcome! Try different options in the toolbar to customize your chat experience.</span>
                                     </div>
                                 </div>
                             </div>
@@ -596,6 +597,12 @@
                                             
                                             <!-- MCP Enabled View -->
                                             <div class="mcp-chat-enabled" id="mcp-chat-enabled-view" style="display: none;">
+                                                <!-- Info Tips -->
+                                                <div class="mcp-info-tip">
+                                                    <span class="info-icon">💡</span>
+                                                    <span>Start vLLM with Tool Calling enabled. Set Max Model Length to 8192+. Use a larger model with tool calling capability (e.g., Qwen 2.5 7B+, Llama 3.1 8B+) for better results.</span>
+                                                </div>
+                                                
                                                 <!-- No Servers Configured -->
                                                 <div class="mcp-no-servers" id="mcp-chat-no-servers" style="display: none;">
                                                     <p>No MCP servers configured</p>
@@ -1179,6 +1186,20 @@
                                 <div class="form-footer">
                                     <button class="btn btn-secondary" id="mcp-form-cancel">Cancel</button>
                                     <button class="btn btn-primary" id="mcp-form-save">Save Server</button>
+                                </div>
+                            </div>
+
+                            <!-- Security Notice -->
+                            <div class="mcp-security-warning">
+                                <div class="warning-icon">⚠️</div>
+                                <div class="warning-content">
+                                    <strong>Security Notice</strong>
+                                    <ul>
+                                        <li>MCP requires Python 3.10 or higher</li>
+                                        <li>MCP integration is experimental/demo only</li>
+                                        <li>Only use trusted MCP servers</li>
+                                        <li>Review each tool call before executing</li>
+                                    </ul>
                                 </div>
                             </div>
 

@@ -799,13 +799,58 @@ async def test_vllm_connection():
 @app.get("/api/features")
 async def get_features():
     """Check which optional features are available"""
+    # Get version from package or local file
+    version = None
+    
+    # Try 1: Import from installed package
+    try:
+        from vllm_playground import __version__
+        version = __version__
+    except ImportError:
+        pass
+    
+    # Try 2: Read from local vllm_playground/__init__.py (when running from source)
+    if not version:
+        try:
+            init_file = BASE_DIR / "vllm_playground" / "__init__.py"
+            if init_file.exists():
+                import re
+                content = init_file.read_text()
+                match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+                if match:
+                    version = match.group(1)
+        except Exception:
+            pass
+    
+    # Fallback
+    if not version:
+        version = "dev"
+    
     features = {
-        "vllm": True,  # Always available since it's core
+        "version": version,
+        "vllm_installed": False,  # Whether vLLM is installed (for subprocess mode)
+        "vllm_version": None,
         "guidellm": False,
         "mcp": False,
         "container_runtime": None,  # Will be 'podman', 'docker', or None
         "container_mode": CONTAINER_MODE_AVAILABLE
     }
+    
+    # Check vLLM installation (required for subprocess mode)
+    try:
+        import vllm
+        features["vllm_installed"] = True
+        # Try multiple ways to get vLLM version
+        vllm_ver = getattr(vllm, '__version__', None)
+        if not vllm_ver:
+            try:
+                from importlib.metadata import version
+                vllm_ver = version('vllm')
+            except Exception:
+                pass
+        features["vllm_version"] = vllm_ver  # None if not found
+    except ImportError:
+        pass
     
     # Check guidellm
     try:
