@@ -823,14 +823,45 @@ class VLLMContainerManager:
             )
             
             if result.returncode == 0 and result.stdout.strip():
-                containers = json.loads(result.stdout)
-                if containers:
+                output = result.stdout.strip()
+                
+                # Handle different JSON formats between Docker and Podman
+                # Docker returns: [] or [{...}]
+                # Podman may return: [{...}] or newline-separated JSON objects
+                try:
+                    containers = json.loads(output)
+                except json.JSONDecodeError:
+                    # Podman sometimes returns newline-separated JSON objects
+                    lines = output.strip().split('\n')
+                    containers = [json.loads(line) for line in lines if line.strip()]
+                
+                # Ensure containers is a list
+                if isinstance(containers, dict):
+                    containers = [containers]
+                
+                if containers and len(containers) > 0:
                     container = containers[0]
+                    # Docker uses 'State', Podman may use 'Status' or 'State'
+                    state = container.get('State', container.get('Status', 'running'))
+                    # Docker uses 'ID' or 'Id', handle both
+                    container_id = container.get('Id', container.get('ID', ''))
+                    if container_id:
+                        container_id = container_id[:12]
+                    # Docker uses 'Names' as a string or list
+                    names = container.get('Names', self.CONTAINER_NAME)
+                    if isinstance(names, list):
+                        name = names[0] if names else self.CONTAINER_NAME
+                    else:
+                        name = names
+                    # Remove leading slash if present (Docker convention)
+                    if isinstance(name, str) and name.startswith('/'):
+                        name = name[1:]
+                    
                     return {
                         'running': True,
-                        'status': container.get('State', 'running'),
-                        'id': container.get('Id', '')[:12],
-                        'name': container.get('Names', [''])[0] if isinstance(container.get('Names'), list) else self.CONTAINER_NAME
+                        'status': state,
+                        'id': container_id,
+                        'name': name
                     }
             
             return {
@@ -839,7 +870,7 @@ class VLLMContainerManager:
             }
                 
         except Exception as e:
-            logger.error(f"Error checking container status: {e}")
+            logger.error(f"Error checking container status: {type(e).__name__}: {e}")
             return {
                 'running': False,
                 'status': 'error',
